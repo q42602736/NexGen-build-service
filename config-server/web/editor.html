@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NexGen Client 配置编辑器</title>
+    <title>Xboard-Mihomo_sub 配置编辑器</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -120,12 +120,6 @@
             border: 1px solid rgba(0,255,136,0.3);
         }
         .btn-sm.btn-save:hover { background: rgba(0,255,136,0.25); }
-        .btn-sm.btn-rename {
-            background: rgba(255,193,7,0.15);
-            color: #ffc107;
-            border: 1px solid rgba(255,193,7,0.3);
-        }
-        .btn-sm.btn-rename:hover { background: rgba(255,193,7,0.25); }
         .btn-sm.btn-del {
             background: rgba(255,68,68,0.15);
             color: #ff6b6b;
@@ -3087,7 +3081,7 @@
         <!-- 左侧边栏 -->
         <div class="sidebar">
             <div class="sidebar-header">
-                <h1>NexGen Client</h1>
+                <h1 id="sidebarClientTitle">Xboard-Mihomo_sub</h1>
                 <div class="user-info">
                     <span class="user-name" id="userName"></span>
                     <span id="userPerm"></span>
@@ -3100,12 +3094,7 @@
                 <select id="profileSelect">
                     <option value="">-- 请选择档案 --</option>
                 </select>
-                <div class="sidebar-profile-actions">
-                    <button class="btn-sm btn-load" id="loadProfileBtn">加载</button>
-                    <button class="btn-sm btn-save" id="saveProfileBtn">保存</button>
-                    <button class="btn-sm btn-rename" id="renameProfileBtn">重命名</button>
-                    <button class="btn-sm btn-del" id="deleteProfileBtn">删除</button>
-                </div>
+                <div class="sidebar-profile-actions" id="profileActionButtons"></div>
                 <div class="sidebar-new-profile" id="newProfileInput">
                     <input type="text" id="newProfileName" placeholder="输入档案名称">
                     <div class="sidebar-new-profile-actions">
@@ -3162,6 +3151,7 @@
             </div>
 
             <div class="sidebar-footer">
+                <a href="/clients.html" class="btn-admin">切换客户端</a>
                 <a href="/admin.html" class="btn-admin" id="adminLink" style="display:none;">管理后台</a>
                 <button class="btn-logout" onclick="logout()">退出登录</button>
             </div>
@@ -4096,12 +4086,12 @@
                                             </div>
                                         </div>
                                     </div>
-                                    <div class="remote-config-actions" style="margin-top: 16px; margin-bottom: 10px;">
-                                        <button type="button" class="btn btn-secondary" onclick="downloadRemoteConfigJson()">下载配置好的 JSON</button>
-                                        <button type="button" class="btn btn-success page-save-btn" onclick="saveCurrentRemoteConfig()">保存当前配置</button>
-                                    </div>
-                                    <textarea id="remoteConfigInput" readonly style="display:none;"></textarea>
                                 </div>
+                                <div class="remote-config-actions" style="margin-top: 16px; margin-bottom: 10px;">
+                                    <button type="button" class="btn btn-secondary" onclick="downloadRemoteConfigJson()">下载配置好的 JSON</button>
+                                    <button type="button" class="btn btn-success page-save-btn" onclick="saveCurrentRemoteConfig()">保存当前配置</button>
+                                </div>
+                                <textarea id="remoteConfigInput" readonly style="display:none;"></textarea>
                             </div>
 
                             <div class="section">
@@ -4245,7 +4235,7 @@
                     <div class="build-panel">
 	                        <h3>打包配置</h3>
 	                        <div class="build-usage-info" id="buildUsageInfo" style="margin-top:12px; margin-bottom:12px;">软件打包状态加载中...</div>
-	                        <div class="form-group">
+	                        <div class="form-group" id="buildCoreGroup">
 	                            <label>选择打包内核</label>
 	                            <div class="build-core-options">
 	                                <label class="build-core-option">
@@ -4381,6 +4371,15 @@
     <script>
         // ==================== 会话管理 ====================
         var SESSION_KEY = 'xboard_session';
+        var SELECTED_CLIENT_KEY = 'xboard_selected_client';
+        var PERSISTED_CLIENT_KEY = 'xboard_persisted_client';
+        var BUILD_CLIENT_LEGACY = 'xboard_mihomo_sub';
+        var BUILD_CLIENT = BUILD_CLIENT_LEGACY;
+
+        function appendBuildClientQuery(path) {
+            var separator = path.indexOf('?') === -1 ? '?' : '&';
+            return path + separator + 'client=' + encodeURIComponent(BUILD_CLIENT);
+        }
 
         function getSession() {
             try {
@@ -4389,6 +4388,81 @@
                 return null;
             }
         }
+
+        function normalizeClient(client) {
+            client = String(client || '').trim();
+            if (client === 'nexgen' || client === 'nexgen-react') return 'nexgen_react';
+            if (client === 'legacy' || client === 'xboard') return 'xboard_mihomo_sub';
+            return client;
+        }
+
+        function isKnownBuildClient(client) {
+            client = normalizeClient(client);
+            return client === BUILD_CLIENT_LEGACY;
+        }
+
+        function resolveCurrentBuildClient() {
+            return BUILD_CLIENT_LEGACY;
+        }
+
+        function getBuildClientLabel() {
+            return 'Xboard-Mihomo_sub';
+        }
+
+        function syncClientModeUI() {
+            document.title = getBuildClientLabel() + ' 配置编辑器';
+            var title = document.getElementById('sidebarClientTitle');
+            if (title) {
+                title.textContent = getBuildClientLabel();
+            }
+            var buildBtn = document.getElementById('buildBtn');
+            if (buildBtn) {
+                buildBtn.textContent = '开始打包';
+            }
+            var buildStatus = document.getElementById('buildStatus');
+            if (buildStatus) {
+                buildStatus.textContent = '选择平台和版本后点击“开始打包”';
+            }
+        }
+
+        function isClientAllowedBySession(session, client) {
+            client = normalizeClient(client);
+            if (!isKnownBuildClient(client)) return false;
+            var allowedClients = session && Array.isArray(session.allowed_clients) ? session.allowed_clients : [];
+            if (allowedClients.length === 0) return true;
+            return allowedClients.map(normalizeClient).indexOf(client) !== -1;
+        }
+
+        function saveSession(nextSession) {
+            sessionStorage.setItem(SESSION_KEY, JSON.stringify(nextSession));
+        }
+
+        function syncSessionUserInfo(data) {
+            var session = getSession();
+            if (!session || !data) return;
+            session.name = data.name || session.name;
+            session.permissions = data.permissions || session.permissions;
+            session.allowed_clients = Array.isArray(data.allowed_clients) ? data.allowed_clients : [];
+            saveSession(session);
+        }
+
+        function ensureCurrentClientAllowed() {
+            var session = getSession();
+            if (!session || !session.token) {
+                window.location.href = '/';
+                return false;
+            }
+            if (!isClientAllowedBySession(session, BUILD_CLIENT)) {
+                sessionStorage.removeItem(SELECTED_CLIENT_KEY);
+                window.location.href = '/clients.html';
+                return false;
+            }
+            localStorage.setItem(PERSISTED_CLIENT_KEY, BUILD_CLIENT);
+            sessionStorage.setItem(SELECTED_CLIENT_KEY, BUILD_CLIENT);
+            return true;
+        }
+
+        ensureCurrentClientAllowed();
 
         function getToken() {
             var s = getSession();
@@ -4437,7 +4511,8 @@
             var formData = new FormData();
             formData.append('file', file);
 
-            var response = await fetch('/api/profiles/' + encodeURIComponent(profileName) + '/assets/' + encodeURIComponent(kind), {
+            var uploadPath = appendBuildClientQuery('/profiles/' + encodeURIComponent(profileName) + '/assets/' + encodeURIComponent(kind));
+            var response = await fetch('/api' + uploadPath, {
                 method: 'POST',
                 headers: {
                     'Authorization': 'Bearer ' + token
@@ -4480,7 +4555,7 @@
             var token = getToken();
             if (!token) return null;
 
-            var response = await fetch('/api/profile-assets/history/' + encodeURIComponent(recordId), {
+            var response = await fetch('/api' + appendBuildClientQuery('/profile-assets/history/' + encodeURIComponent(recordId)), {
                 method: 'DELETE',
                 headers: {
                     'Authorization': 'Bearer ' + token
@@ -4498,6 +4573,20 @@
         function isAdminSession() {
             var session = getSession();
             return !!(session && session.permissions === 'admin');
+        }
+
+        function renderProfileActionButtons() {
+            var container = document.getElementById('profileActionButtons');
+            if (!container) return;
+            var html = ''
+                + '<button class="btn-sm btn-load" id="loadProfileBtn">加载</button>'
+                + '<button class="btn-sm btn-save" id="saveProfileBtn">保存</button>';
+            container.innerHTML = html;
+
+            var loadBtn = document.getElementById('loadProfileBtn');
+            var saveBtn = document.getElementById('saveProfileBtn');
+            if (loadBtn) loadBtn.addEventListener('click', loadProfile);
+            if (saveBtn) saveBtn.addEventListener('click', showSaveProfileInput);
         }
 
 
@@ -4806,7 +4895,7 @@
 
         async function loadAppIconHistory() {
             try {
-                var response = await api('GET', '/profile-assets/history?kind=app-icon&limit=5');
+                var response = await api('GET', appendBuildClientQuery('/profile-assets/history?kind=app-icon&limit=5'));
                 if (!response) return;
                 var data = await response.json();
                 if (!response.ok) {
@@ -4984,6 +5073,7 @@
 
         function getBuildPlatformLabelMap() {
             return {
+                'windows': 'Windows',
                 'windows-arm64': 'Windows ARM64',
                 'windows-amd64': 'Windows AMD64',
                 'android': 'Android（手机）',
@@ -4996,7 +5086,16 @@
         }
 
 	        function getBuildPlatformCatalogValues() {
-	            return Object.keys(getBuildPlatformLabelMap());
+	            return [
+	                'windows-arm64',
+	                'windows-amd64',
+	                'android',
+	                'android-tv',
+	                'linux-arm64',
+	                'linux-amd64',
+	                'macos-arm64',
+	                'macos-amd64'
+	            ];
 	        }
 
 	        function getBuildCoreLabelMap() {
@@ -5026,12 +5125,17 @@
 	            });
 	        }
 
+	        function normalizeAllowedBuildPlatformsForCurrentClient(platforms) {
+	            if (!Array.isArray(platforms) || platforms.length === 0) return [];
+	            return platforms;
+	        }
+
 	        function formatAllowedBuildPlatforms(platforms) {
 	            if (!platforms || platforms.length === 0) {
                 return '全部平台';
             }
             var labelMap = getBuildPlatformLabelMap();
-            return platforms.map(function(platform) {
+            return normalizeAllowedBuildPlatformsForCurrentClient(platforms).map(function(platform) {
                 return escapeHtml(labelMap[platform] || platform);
             }).join('、');
         }
@@ -5043,7 +5147,7 @@
 	            if (!currentUserInfo || currentUserInfo.permissions === 'admin') {
 	                return true;
 	            }
-            var allowedPlatforms = Array.isArray(currentUserInfo.allowed_platforms) ? currentUserInfo.allowed_platforms : [];
+            var allowedPlatforms = normalizeAllowedBuildPlatformsForCurrentClient(currentUserInfo.allowed_platforms);
             if (allowedPlatforms.length === 0) {
                 return true;
             }
@@ -5059,7 +5163,7 @@
 	            var currentCore = getSelectedBuildCore();
 	            var currentCatalog = getBuildPlatformCatalogValuesForCore(currentCore);
 	            var hasRestriction = currentUserInfo && currentUserInfo.permissions !== 'admin' && Array.isArray(currentUserInfo.allowed_platforms) && currentUserInfo.allowed_platforms.length > 0;
-	            var allowedPlatforms = hasRestriction ? currentUserInfo.allowed_platforms : currentCatalog;
+	            var allowedPlatforms = hasRestriction ? normalizeAllowedBuildPlatformsForCurrentClient(currentUserInfo.allowed_platforms) : currentCatalog;
 	            var allAllowed = currentCatalog.length > 0 && currentCatalog.every(function(platform) {
 	                return allowedPlatforms.indexOf(platform) !== -1;
 	            });
@@ -5153,8 +5257,12 @@
 		                        catalog.forEach(addJob);
 	                        break;
 	                    case 'windows':
-	                        addJob('windows-amd64');
-                        addJob('windows-arm64');
+	                        if (catalog.indexOf('windows') !== -1) {
+	                            addJob('windows');
+	                        } else {
+	                            addJob('windows-amd64');
+	                            addJob('windows-arm64');
+	                        }
                         break;
                     case 'linux':
                         addJob('linux-amd64');
@@ -5166,6 +5274,7 @@
                         break;
 	                    case 'windows-amd64':
 	                    case 'windows-arm64':
+	                    case 'windows':
 	                    case 'android':
                     case 'android-tv':
                     case 'linux-amd64':
@@ -5622,6 +5731,8 @@
                 if (!response) return;
                 var data = await response.json();
                 currentUserInfo = data || null;
+                syncSessionUserInfo(data);
+                if (!ensureCurrentClientAllowed()) return;
                 renderBuildUsageInfo(data);
                 updateCustomTrafficBarCodeHint();
                 syncCustomTrafficBarAccessView();
@@ -5883,7 +5994,7 @@
 
             setCustomTrafficBarStatus('正在校验对接码并读取当前公共配置...', 'info');
             try {
-                var response = await api('POST', '/custom-features/ui-colors/load', {
+                var response = await api('POST', appendBuildClientQuery('/custom-features/ui-colors/load'), {
                     profile: profileName,
                     integration_code: integrationCode
                 });
@@ -5924,7 +6035,7 @@
 
             setCustomTrafficBarStatus('正在读取当前公共配置...', 'info');
             try {
-                var response = await api('POST', '/custom-features/ui-colors/load', {
+                var response = await api('POST', appendBuildClientQuery('/custom-features/ui-colors/load'), {
                     profile: profileName,
                     integration_code: integrationCode
                 });
@@ -6023,7 +6134,7 @@
 
             setCustomTrafficBarStatus('正在写入公共配置...', 'info');
             try {
-                var response = await api('PUT', '/custom-features/ui-colors', {
+                var response = await api('PUT', appendBuildClientQuery('/custom-features/ui-colors'), {
                     profile: profileName,
                     integration_code: integrationCode,
                     traffic_bar_enabled: enabled,
@@ -6554,7 +6665,9 @@
             document.querySelectorAll('.content-section').forEach(function(section) {
                 section.classList.remove('active');
             });
-            document.getElementById(sectionName + 'Section').classList.add('active');
+            var targetSection = document.getElementById(sectionName + 'Section');
+            if (!targetSection) return;
+            targetSection.classList.add('active');
             if (sectionName === 'updates') {
                 loadClientUpdates(false);
             } else if (sectionName === 'customFeatures') {
@@ -6577,6 +6690,7 @@
                 window.location.href = '/';
                 return;
             }
+            syncClientModeUI();
 
             document.getElementById('userName').textContent = session.name || '用户';
             var userPermEl = document.getElementById('userPerm');
@@ -6590,10 +6704,9 @@
             if (session.permissions === 'admin') {
                 document.getElementById('adminLink').style.display = 'inline-block';
             } else {
-                document.getElementById('renameProfileBtn').style.display = 'none';
-                document.getElementById('deleteProfileBtn').style.display = 'none';
-                document.getElementById('saveProfileBtn').textContent = '保存';
+                document.getElementById('adminLink').style.display = 'none';
             }
+            renderProfileActionButtons();
             await loadCurrentUserInfo();
             document.getElementById('customTrafficBarIntegrationCode').value =
                 sessionStorage.getItem(CUSTOM_TRAFFIC_BAR_CODE_STORAGE_KEY) || '';
@@ -6713,10 +6826,6 @@
                 updateSecureLogPathHint();
             });
 
-            document.getElementById('loadProfileBtn').addEventListener('click', loadProfile);
-            document.getElementById('saveProfileBtn').addEventListener('click', showSaveProfileInput);
-            document.getElementById('renameProfileBtn').addEventListener('click', renameProfile);
-            document.getElementById('deleteProfileBtn').addEventListener('click', deleteProfile);
             document.getElementById('confirmSaveProfileBtn').addEventListener('click', confirmSaveProfile);
             document.getElementById('cancelSaveProfileBtn').addEventListener('click', hideSaveProfileInput);
 
@@ -6754,7 +6863,7 @@
         };
 
         function getDefaultYamlTemplate() {
-            return [
+            var lines = [
                 'xboard:',
                 '  provider: ""',
                 '  app:',
@@ -6833,14 +6942,15 @@
                 '      show_button: false',
                 '    gift_card:',
                 '      show_button: false'
-            ].join('\n');
+            ];
+            return lines.join('\n');
         }
 
         // ==================== 配置档案 API ====================
 
         async function loadProfiles() {
             try {
-                var response = await api('GET', '/profiles');
+                var response = await api('GET', appendBuildClientQuery('/profiles'));
                 if (!response) return;
                 var data = await response.json();
                 profilesCache = data.profiles || [];
@@ -6882,7 +6992,7 @@
 
             setStatus('正在加载档案...', 'info');
             try {
-                var response = await api('GET', '/profiles/' + encodeURIComponent(name));
+                var response = await api('GET', appendBuildClientQuery('/profiles/' + encodeURIComponent(name)));
                 if (!response) return;
                 if (!response.ok) {
                     var err = await response.json();
@@ -6976,7 +7086,7 @@
                 };
             });
 
-            return {
+            var formState = {
                 provider: document.getElementById('provider').value.trim(),
                 app_title: getBoundAppTitleValue(),
                 logo_type: document.getElementById('logoType').value,
@@ -7013,6 +7123,7 @@
                 sources: validSources,
                 online_support_items: validSupportItems
             };
+            return formState;
         }
 
 	        async function saveProfileByName(profileName, options) {
@@ -7034,7 +7145,7 @@
 
 	            try {
 	                var displayName = options.displayName || getProfileDisplayName(findProfileByKey(profileName)) || profileName;
-	                var response = await api('PUT', '/profiles/' + encodeURIComponent(profileName), {
+	                var response = await api('PUT', appendBuildClientQuery('/profiles/' + encodeURIComponent(profileName)), {
 	                    yaml_content: baseYamlContent,
 	                    base_yaml_content: baseYamlContent,
 	                    form_state: buildCurrentProfileFormState(),
@@ -7115,93 +7226,12 @@
 	            });
 	        }
 
-        async function renameProfile() {
-            if (!isAdminSession()) {
-                setStatus('只有管理员可以重命名档案', 'error');
-                return;
-            }
-
-	            var oldName = getSelectedProfileKey();
-	            var oldDisplayName = getSelectedProfileDisplayName();
-	            if (!oldName) {
-	                setStatus('请先选择要重命名的档案', 'error');
-	                return;
-	            }
-
-	            hideSaveProfileInput();
-	            var newName = window.prompt('请输入新的档案名称', oldName);
-            if (newName === null) {
-                return;
-            }
-            newName = String(newName || '').trim();
-            if (!newName) {
-                setStatus('新档案名称不能为空', 'error');
-                return;
-            }
-	            if (newName === oldName) {
-	                setStatus('新档案名称不能与原名称相同', 'error');
-	                return;
-	            }
-	            if (profilesCache.some(function(profile) { return profile && getProfileKey(profile) === newName; })) {
-	                setStatus('新档案名称已存在', 'error');
-	                return;
-	            }
-	            if (!await showAppConfirm('确定将档案 "' + oldDisplayName + '" 重命名为 "' + newName + '" 吗？绑定关系和历史记录会同步更新。', '重命名档案', '确认重命名')) {
-	                return;
-	            }
-
-            setStatus('正在重命名...', 'info');
-            try {
-                var response = await api('PUT', '/admin/profiles/' + encodeURIComponent(oldName) + '/rename', {
-                    new_name: newName
-                });
-                if (!response) return;
-                if (!response.ok) {
-                    var err = await response.json();
-                    throw new Error(err.error || '重命名失败');
-	                }
-	                await loadProfiles();
-	                document.getElementById('profileSelect').value = newName;
-	                syncAllCustomSelects(document.getElementById('profileSelect'));
-	                await loadProfile();
-	                setStatus('已重命名: ' + oldDisplayName + ' -> ' + newName, 'success');
-	            } catch (e) {
-                setStatus('重命名失败: ' + e.message, 'error');
-            }
-        }
-
-        async function deleteProfile() {
-	            var name = getSelectedProfileKey();
-	            if (!name) {
-	                setStatus('请先选择要删除的档案', 'error');
-	                return;
-	            }
-	            var displayName = getSelectedProfileDisplayName();
-	            if (!await showAppConfirm('确定要删除档案 "' + displayName + '" 吗？此操作不可恢复。', '删除档案', '确认删除')) {
-	                return;
-	            }
-
-            setStatus('正在删除...', 'info');
-            try {
-                var response = await api('DELETE', '/profiles/' + encodeURIComponent(name));
-                if (!response) return;
-                if (!response.ok) {
-                    var err = await response.json();
-                    throw new Error(err.error || '删除失败');
-	                }
-	                await loadProfiles();
-	                setStatus('已删除: ' + displayName, 'success');
-            } catch (e) {
-                setStatus('删除失败: ' + e.message, 'error');
-            }
-        }
-
         // ==================== 构建相关 API ====================
 
         async function loadBranches() {
             try {
                 var core = getSelectedBuildCore();
-	                var buildResponse = await api('GET', '/branches?core=' + encodeURIComponent(core));
+	                var buildResponse = await api('GET', appendBuildClientQuery('/branches?core=' + encodeURIComponent(core)));
 	                if (!buildResponse) return;
 	                if (!buildResponse.ok) {
 	                    throw new Error('构建分支列表获取失败');
@@ -7212,7 +7242,7 @@
 	                }
 	                var updateBranches = buildBranches;
                 if (core !== 'mihomo') {
-                    var updateResponse = await api('GET', '/branches?core=mihomo');
+                    var updateResponse = await api('GET', appendBuildClientQuery('/branches?core=mihomo'));
 	                    if (updateResponse && updateResponse.ok) {
 	                        updateBranches = await updateResponse.json();
 	                    }
@@ -7288,7 +7318,7 @@
 
         async function loadBuildHistory() {
             try {
-                var response = await api('GET', '/build/history');
+                var response = await api('GET', appendBuildClientQuery('/build/history'));
                 if (!response) return;
                 buildHistoryData = await response.json();
                 displayBuildHistory();
@@ -7319,7 +7349,7 @@
             if (build) {
 	                content.innerHTML = '<span style="color:#ffaa00;">' + escapeHtml(profileDisplayName || appName) + '</span> | ' +
                     '<span style="color:#00ff88;">版本: ' + build.version + '</span> | ' +
-                    '<span style="color:#8fb4ff;">内核: ' + escapeHtml(formatBuildCoreLabel(build.core || 'mihomo')) + '</span> | ' +
+                    '<span style="color:#8fb4ff;">内核: ' + escapeHtml(formatBuildCoreLabel(build.core || getSelectedBuildCore())) + '</span> | ' +
                     '<span style="color:#00d4ff;">平台: ' + build.platforms + '</span> | ' +
                     '<span style="color:#aaa;">时间: ' + build.time + '</span>';
                 info.style.display = 'block';
@@ -7400,14 +7430,14 @@
                 selectedBranch = selectedOption.hasAttribute('data-branch') ? selectedOption.getAttribute('data-branch') : selectedOption.value;
                 selectedBranch = String(selectedBranch || '').trim();
             }
-            var selectedCore = 'mihomo';
+            var selectedCore = getSelectedBuildCore();
             if (selectedOption) {
-                selectedCore = selectedOption.getAttribute('data-core') || 'mihomo';
+                selectedCore = selectedOption.getAttribute('data-core') || getSelectedBuildCore();
             }
             if (isHiddenClientUpdatesBranch(selectedBranch)) {
                 selectedBranch = '';
                 branchSelect.value = '';
-                selectedCore = 'mihomo';
+                selectedCore = getSelectedBuildCore();
                 syncAllCustomSelects(branchSelect, true);
             }
             var selectedUpdatesKey = selectedCore + ':' + selectedBranch;
@@ -7424,6 +7454,7 @@
             }
             try {
                 var params = new URLSearchParams();
+                params.set('client', BUILD_CLIENT);
                 if (selectedCore && selectedCore !== 'mihomo') {
                     params.set('core', selectedCore);
                 }
@@ -7684,7 +7715,7 @@
                 html += '<div style="display:flex; align-items:flex-start; justify-content:space-between; gap:10px;">';
                 html += '<div style="display:flex; flex-direction:column; gap:6px; min-width:0;">';
                 html += '<div style="color:#fff; font-size:13px;">' + record.profile + ' · ' + record.tag + '</div>';
-                html += '<div style="color:#aaa; font-size:12px;">内核: ' + escapeHtml(formatBuildCoreLabel(record.core || 'mihomo')) + ' · 分支: ' + record.branch + ' · 平台: ' + record.platforms + '</div>';
+                html += '<div style="color:#aaa; font-size:12px;">内核: ' + escapeHtml(formatBuildCoreLabel(record.core || getSelectedBuildCore())) + ' · 分支: ' + record.branch + ' · 平台: ' + record.platforms + '</div>';
                 html += '<div style="color:#888; font-size:12px;">创建时间: ' + record.created_at + '</div>';
                 html += '</div>';
                 var actionButtonsHtml = '';
@@ -7736,7 +7767,7 @@
                 profile: record.profile,
                 tag: record.tag || '',
                 branch: record.branch || 'main',
-                core: record.core || 'mihomo',
+                core: record.core || getSelectedBuildCore(),
                 platforms: record.platforms || 'all',
                 requestId: record.request_id || String(record.id),
                 buildRecordId: record.id,
@@ -7775,7 +7806,7 @@
                 inputs: {
                     tag: record.tag || '',
                     branch: record.branch || 'main',
-                    core: record.core || 'mihomo',
+                    core: record.core || getSelectedBuildCore(),
                     platforms: record.platforms || 'all'
                 }
             };
@@ -7792,7 +7823,7 @@
             buildPollContext.conclusion = matchedRecord.conclusion || '';
             buildPollContext.tag = matchedRecord.tag || buildPollContext.tag;
             buildPollContext.branch = matchedRecord.branch || buildPollContext.branch;
-            buildPollContext.core = matchedRecord.core || buildPollContext.core || 'mihomo';
+            buildPollContext.core = matchedRecord.core || buildPollContext.core || getSelectedBuildCore();
             buildPollContext.platforms = matchedRecord.platforms || buildPollContext.platforms;
             saveBuildingProfile(buildPollContext);
 
@@ -7833,7 +7864,7 @@
         async function loadMyBuildRecords() {
             try {
                 buildAssetCache = {};
-                var response = await api('GET', '/build/records?limit=5');
+                var response = await api('GET', appendBuildClientQuery('/build/records?limit=5'));
                 if (!response) return [];
                 var data = await response.json();
                 if (!response.ok) {
@@ -7898,7 +7929,7 @@
             }
             buildQueuePollInFlight = true;
             try {
-                var query = '?core=' + encodeURIComponent(selectedCore);
+                var query = '?client=' + encodeURIComponent(BUILD_CLIENT) + '&core=' + encodeURIComponent(selectedCore);
                 if (selectedPlatforms) {
                     query += '&platforms=' + encodeURIComponent(selectedPlatforms);
                 }
@@ -7965,6 +7996,7 @@
             setBuildStatus('正在提交打包...', 'info');
             try {
                 var response = await api('POST', '/build/trigger', {
+                    client: BUILD_CLIENT,
                     profile: profileName,
                     tag: buildTag,
                     core: buildCore,
@@ -8735,7 +8767,7 @@
             if (providerValue) {
                 panels[providerValue] = panelItems;
             }
-            return {
+            var result = {
                 panelType: panelTypeValue,
                 websiteUrl: websiteUrlValue,
                 panels: panels,
@@ -8743,6 +8775,7 @@
                 ws: [],
                 update: updateItems
             };
+            return result;
         }
 
         function buildRemoteConfigTemplateString(requireComplete) {
@@ -9286,7 +9319,10 @@
             return String(value || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
         }
 
-        function createSupportItem(index, item) {
+        function createSupportItem(index, item, options) {
+            options = options || {};
+            var removeHandler = options.removeHandler || 'removeSupportItem';
+            var changeHandler = options.changeHandler || 'formToYaml';
             item = normalizeSupportItem(item || { type: 'browser', url: '', description: '', website_id: '', widget_id: '', property_id: '', website_token: '', base_url: '', chatra_id: '', widget_code: '' });
             var div = document.createElement('div');
             div.className = 'support-item';
@@ -9298,10 +9334,10 @@
                 div.dataset.legacyChatraWidgetCode = item.widget_code;
             }
             div.innerHTML = '<div class="support-index">客服配置 #' + (index + 1) + '</div>' +
-                '<button type="button" class="btn-remove" onclick="removeSupportItem(' + index + ')">删除</button>' +
+                '<button type="button" class="btn-remove" onclick="' + removeHandler + '(' + index + ')">删除</button>' +
                 '<div class="form-row">' +
                     '<div class="form-group"><label>类型</label>' +
-                        '<select class="support-type" onchange="updateSupportFields(this)">' +
+                        '<select class="support-type" onchange="updateSupportFields(this, ' + "'" + changeHandler + "'" + ')">' +
                             '<option value="browser"' + (item.type === 'browser' ? ' selected' : '') + '>browser (网页)</option>' +
                             '<option value="crisp"' + (item.type === 'crisp' ? ' selected' : '') + '>crisp</option>' +
                             '<option value="chatra"' + (item.type === 'chatra' ? ' selected' : '') + '>chatra</option>' +
@@ -9311,59 +9347,63 @@
                         '</select>' +
                     '</div>' +
                     '<div class="form-group"><label>描述</label>' +
-                        '<input type="text" class="support-description" value="' + (item.description || '') + '" placeholder="如: 在线客服">' +
+                        '<input type="text" class="support-description" value="' + escapeHtml(item.description || '') + '" placeholder="如: 在线客服">' +
                     '</div>' +
                 '</div>' +
                 '<div class="support-fields browser-fields' + (item.type === 'browser' ? ' active' : '') + '">' +
                     '<div class="form-group"><label>客服页面URL</label>' +
-                        '<input type="text" class="support-url" value="' + (item.url || '') + '" placeholder="https://example.com/support">' +
+                        '<input type="text" class="support-url" value="' + escapeHtml(item.url || '') + '" placeholder="https://example.com/support">' +
                     '</div>' +
                 '</div>' +
                 '<div class="support-fields crisp-fields' + (item.type === 'crisp' ? ' active' : '') + '">' +
                     '<div class="form-group"><label>Website ID</label>' +
-                        '<input type="text" class="support-website-id" value="' + (item.website_id || '') + '" placeholder="CRISP Website ID">' +
+                        '<input type="text" class="support-website-id" value="' + escapeHtml(item.website_id || '') + '" placeholder="CRISP Website ID">' +
                     '</div>' +
                 '</div>' +
                 '<div class="support-fields chatra-fields' + (item.type === 'chatra' ? ' active' : '') + '">' +
                     '<div class="form-group"><label>Chatra ID</label>' +
-                        '<input type="text" class="support-chatra-id" value="' + (item.chatra_id || '') + '" placeholder="ChatraID">' +
+                        '<input type="text" class="support-chatra-id" value="' + escapeHtml(item.chatra_id || '') + '" placeholder="ChatraID">' +
                         '<div class="help-text">仅需填写 ChatraID；旧版 <code>widget_code</code> 会自动兼容</div>' +
                     '</div>' +
                 '</div>' +
                 '<div class="support-fields chatway-fields' + (item.type === 'chatway' ? ' active' : '') + '">' +
                     '<div class="form-group"><label>Widget ID</label>' +
-                        '<input type="text" class="support-chatway-widget-id" value="' + (item.widget_id || '') + '" placeholder="Chatway Widget ID">' +
+                        '<input type="text" class="support-chatway-widget-id" value="' + escapeHtml(item.widget_id || '') + '" placeholder="Chatway Widget ID">' +
                     '</div>' +
                 '</div>' +
                 '<div class="support-fields tawkto-fields' + (item.type === 'tawkto' ? ' active' : '') + '">' +
                     '<div class="form-row">' +
                         '<div class="form-group"><label>Property ID</label>' +
-                            '<input type="text" class="support-property-id" value="' + (item.property_id || '') + '" placeholder="Tawk.to Property ID">' +
+                            '<input type="text" class="support-property-id" value="' + escapeHtml(item.property_id || '') + '" placeholder="Tawk.to Property ID">' +
                         '</div>' +
                         '<div class="form-group"><label>Widget ID</label>' +
-                            '<input type="text" class="support-tawkto-widget-id" value="' + (item.widget_id || '') + '" placeholder="Tawk.to Widget ID">' +
+                            '<input type="text" class="support-tawkto-widget-id" value="' + escapeHtml(item.widget_id || '') + '" placeholder="Tawk.to Widget ID">' +
                         '</div>' +
                     '</div>' +
                 '</div>' +
                 '<div class="support-fields chatwoot-fields' + (item.type === 'chatwoot' ? ' active' : '') + '">' +
                     '<div class="form-row">' +
                         '<div class="form-group"><label>Website Token</label>' +
-                            '<input type="text" class="support-website-token" value="' + (item.website_token || '') + '" placeholder="Chatwoot Website Token">' +
+                            '<input type="text" class="support-website-token" value="' + escapeHtml(item.website_token || '') + '" placeholder="Chatwoot Website Token">' +
                         '</div>' +
                         '<div class="form-group"><label>Base URL</label>' +
-                            '<input type="text" class="support-base-url" value="' + (item.base_url || '') + '" placeholder="https://your-chatwoot.com">' +
+                            '<input type="text" class="support-base-url" value="' + escapeHtml(item.base_url || '') + '" placeholder="https://your-chatwoot.com">' +
                         '</div>' +
                     '</div>' +
                 '</div>';
             return div;
         }
 
-        function updateSupportFields(selectEl) {
+        function updateSupportFields(selectEl, changeHandler) {
             var item = selectEl.closest('.support-item');
             var type = selectEl.value;
             item.querySelectorAll('.support-fields').forEach(function(f) { f.classList.remove('active'); });
             item.querySelector('.' + type + '-fields').classList.add('active');
-            formToYaml();
+            if (changeHandler === 'handleRemoteConfigFormInput') {
+                handleRemoteConfigFormInput();
+            } else {
+                formToYaml();
+            }
         }
 
         function renderSupportItems() {
@@ -9740,10 +9780,11 @@
 
         function getBuildPollKey() {
             var session = getSession();
+            var clientSuffix = ':' + BUILD_CLIENT;
             if (session && session.name) {
-                return BUILD_POLL_KEY_BASE + ':' + session.name;
+                return BUILD_POLL_KEY_BASE + ':' + session.name + clientSuffix;
             }
-            return BUILD_POLL_KEY_BASE;
+            return BUILD_POLL_KEY_BASE + clientSuffix;
         }
 
         function normalizeBuildPollContext(context) {
@@ -9753,7 +9794,7 @@
                     profile: context,
                     tag: '',
                     branch: 'main',
-                    core: 'mihomo',
+                    core: getSelectedBuildCore(),
                     platforms: 'all',
                     requestId: '',
                     buildRecordId: 0,
@@ -9766,7 +9807,7 @@
                 profile: context.profile,
                 tag: context.tag || '',
                 branch: context.branch || 'main',
-                core: context.core || 'mihomo',
+                core: context.core || getSelectedBuildCore(),
                 platforms: context.platforms || 'all',
                 requestId: context.requestId || context.request_id || '',
                 buildRecordId: context.buildRecordId || context.build_record_id || 0,
@@ -9923,7 +9964,7 @@
         async function pollBuildStatus() {
             if (!buildPollContext || !buildPollContext.profile) return;
             try {
-                var query = '/build/status?profile=' + encodeURIComponent(buildPollContext.profile);
+                var query = '/build/status?client=' + encodeURIComponent(BUILD_CLIENT) + '&profile=' + encodeURIComponent(buildPollContext.profile);
                 if (buildPollContext.tag) {
                     query += '&tag=' + encodeURIComponent(buildPollContext.tag);
                 }
@@ -9956,7 +9997,7 @@
                 if (data.inputs) {
                     buildPollContext.tag = data.inputs.tag || buildPollContext.tag;
                     buildPollContext.branch = data.inputs.branch || buildPollContext.branch;
-                    buildPollContext.core = data.inputs.core || buildPollContext.core || 'mihomo';
+                    buildPollContext.core = data.inputs.core || buildPollContext.core || getSelectedBuildCore();
                     buildPollContext.platforms = data.inputs.platforms || buildPollContext.platforms;
                     saveBuildingProfile(buildPollContext);
                 }
