@@ -1,3 +1,4 @@
+# NexGen 构建工作流（Android 固定签名由 NEXGEN_ANDROID_SIGNING_BUNDLE 提供）
 name: build-nexgen-react
 
 on:
