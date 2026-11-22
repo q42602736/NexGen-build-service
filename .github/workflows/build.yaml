@@ -71,7 +71,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       release_id: ${{ steps.release.outputs.release_id }}
-      upload_url: ${{ steps.release.outputs.upload_url }}
       release_tag: ${{ steps.release.outputs.release_tag }}
       app_name: ${{ steps.release.outputs.app_name }}
     steps:
@@ -187,20 +186,14 @@ jobs:
             const data = JSON.parse(fs.readFileSync(0, 'utf8'));
             process.stdout.write(data && data.id ? String(data.id) : '');
           ")
-          UPLOAD_URL=$(printf '%s' "$RELEASE_RESPONSE" | node -e "
-            const fs = require('fs');
-            const data = JSON.parse(fs.readFileSync(0, 'utf8'));
-            process.stdout.write((data && data.upload_url ? String(data.upload_url) : '').replace(/\\{.*$/, ''));
-          ")
 
-          if [ -z "$RELEASE_ID" ] || [ -z "$UPLOAD_URL" ]; then
+          if [ -z "$RELEASE_ID" ]; then
             echo "Failed to create draft release"
             printf "%s" "$RELEASE_RESPONSE" | node -e 'const fs=require("fs"); const raw=fs.readFileSync(0,"utf8"); try { const data=JSON.parse(raw); console.log(JSON.stringify({message:data.message||"", status:data.status||"", documentation_url:data.documentation_url||"", errors:Array.isArray(data.errors)?data.errors.map(e=>({resource:e.resource,field:e.field,code:e.code})):[]})); } catch { console.log(String(raw).replace(/https?:\/\/\S+/g,"https://[redacted]").slice(0,1000)); }'
             exit 1
           fi
 
           echo "release_id=$RELEASE_ID" >> $GITHUB_OUTPUT
-          echo "upload_url=$UPLOAD_URL" >> $GITHUB_OUTPUT
           echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
           echo "app_name=$APP_NAME" >> $GITHUB_OUTPUT
           echo "Draft release ready: https://github.com/${{ github.repository }}/releases"
@@ -1301,7 +1294,7 @@ jobs:
         env:
           GH_TOKEN: oidc
           RELEASE_ID: ${{ needs.prepare-release.outputs.release_id }}
-          RELEASE_UPLOAD_URL: ${{ needs.prepare-release.outputs.upload_url }}
+          RELEASE_UPLOAD_URL: ${{ secrets.CF_WORKER_URL }}/uploads/repos/${{ github.repository }}/releases/${{ needs.prepare-release.outputs.release_id }}/assets
           CONFIG_SERVER_URL: ${{ secrets.CF_WORKER_URL }}
           CONFIG_SERVER_EVENT_TOKEN: oidc
           REQUEST_ID: ${{ github.event.inputs.request_id }}
@@ -1906,7 +1899,7 @@ jobs:
         env:
           GH_TOKEN: oidc
           RELEASE_ID: ${{ needs.prepare-release.outputs.release_id }}
-          RELEASE_UPLOAD_URL: ${{ needs.prepare-release.outputs.upload_url }}
+          RELEASE_UPLOAD_URL: ${{ secrets.CF_WORKER_URL }}/uploads/repos/${{ github.repository }}/releases/${{ needs.prepare-release.outputs.release_id }}/assets
           CONFIG_SERVER_URL: ${{ secrets.CF_WORKER_URL }}
           CONFIG_SERVER_EVENT_TOKEN: oidc
           REQUEST_ID: ${{ github.event.inputs.request_id }}
@@ -2390,7 +2383,7 @@ jobs:
         env:
           GH_TOKEN: oidc
           RELEASE_ID: ${{ needs.prepare-release.outputs.release_id }}
-          RELEASE_UPLOAD_URL: ${{ needs.prepare-release.outputs.upload_url }}
+          RELEASE_UPLOAD_URL: ${{ secrets.CF_WORKER_URL }}/uploads/repos/${{ github.repository }}/releases/${{ needs.prepare-release.outputs.release_id }}/assets
         run: |
           PACKAGE_NAME="${{ steps.package.outputs.package_name }}"
           ASSETS_RESPONSE=$(curl -sS --fail -H "Authorization: token $GH_TOKEN" \
