@@ -1,0 +1,418 @@
+run-name: nexgen-${{ github.event.inputs.request_id || github.run_id }}-${{ github.event.inputs.profile }}-${{ github.event.inputs.tag }}
+concurrency:
+  group: nexgen-react-${{ github.event.inputs.profile }}
+  cancel-in-progress: false
+env:
+  PROFILE_REPO: q42602736/NexGen-client-React
+  NEXGEN_SOURCE_REPO: q42602736/NexGen-client-React
+  NODE_VERSION: '22'
+  GO_VERSION: '1.22'
+  CI_RETRY_ATTEMPTS: '5'
+  CI_RETRY_DELAY_SECONDS: '5'
+  CARGO_NET_RETRY: '5'
+  CARGO_HTTP_MULTIPLEXING: 'false'
+  CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
+  NPM_CONFIG_FETCH_RETRIES: '5'
+  NPM_CONFIG_FETCH_RETRY_MINTIMEOUT: '20000'
+  NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: '120000'
+  NPM_CONFIG_AUDIT: 'false'
+  NPM_CONFIG_FUND: 'false'
+'on':
+  workflow_dispatch:
+    inputs:
+      client:
+        description: 客户端类型
+        required: false
+        type: string
+        default: nexgen_react
+      profile:
+        description: 配置档案名称
+        required: true
+        type: string
+      profile_branch:
+        description: 配置档案分支
+        required: false
+        type: string
+        default: profiles
+      tag:
+        description: 构建版本号
+        required: true
+        type: string
+      branch:
+        description: NexGen-client-React 源码分支
+        required: false
+        type: string
+        default: xiaov2board/Xboard
+      core:
+        description: 固定为 nexgen
+        required: false
+        type: string
+        default: nexgen
+      platforms:
+        description: 选择平台：all, windows, windows-amd64, windows-arm64, android, android-tv, linux（双架构全部格式）, macos, macos-amd64, macos-arm64
+        required: true
+        type: string
+        default: all
+      request_id:
+        description: 构建请求唯一标识
+        required: false
+        type: string
+name: probe-p4
+jobs:
+  prepare-release:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      release_id: ${{ steps.release.outputs.release_id }}
+      upload_url: ${{ steps.release.outputs.upload_url }}
+      release_tag: ${{ steps.release.outputs.release_tag }}
+      app_name: ${{ steps.config.outputs.app_name }}
+      artifact_app_name: ${{ steps.config.outputs.artifact_app_name }}
+      safe_app_name: ${{ steps.config.outputs.safe_app_name }}
+    steps:
+    - name: Validate Config Server Callback
+      env:
+        CONFIG_SERVER_URL: ${{ secrets.CONFIG_SERVER_URL }}
+        CONFIG_SERVER_EVENT_TOKEN: ${{ secrets.CONFIG_SERVER_EVENT_TOKEN }}
+        REQUEST_ID: ${{ github.event.inputs.request_id }}
+      run: echo stub
+    - name: Configure Network Retries
+      shell: bash
+      run: echo stub
+    - name: Checkout Build Scripts
+      uses: actions/checkout@v4
+      with:
+        path: build-server
+    - name: Checkout NexGen Source
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ env.NEXGEN_SOURCE_REPO }}
+        ref: ${{ github.event.inputs.branch || 'xiaov2board/Xboard' }}
+        token: ${{ secrets.WORKFLOW_TOKEN }}
+        submodules: recursive
+        path: source
+    - name: Setup Node For NexGen Name
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: npm
+        cache-dependency-path: source/package-lock.json
+    - name: Install NexGen Name Dependencies
+      working-directory: source
+      run: echo stub
+    - name: Read And Convert Profile
+      id: config
+      env:
+        GH_TOKEN: ${{ secrets.WORKFLOW_TOKEN }}
+        PROFILE_NAME: ${{ github.event.inputs.profile }}
+        PROFILE_BRANCH: ${{ github.event.inputs.profile_branch }}
+      run: echo stub
+    - name: Prepare Draft Release
+      id: release
+      env:
+        GH_TOKEN: ${{ secrets.WORKFLOW_TOKEN }}
+        APP_NAME: ${{ steps.config.outputs.app_name }}
+        VERSION: ${{ github.event.inputs.tag }}
+        PROFILE_NAME: ${{ github.event.inputs.profile }}
+      run: echo stub
+    - name: Bind Build Record
+      env:
+        CONFIG_SERVER_URL: ${{ secrets.CONFIG_SERVER_URL }}
+        CONFIG_SERVER_EVENT_TOKEN: ${{ secrets.CONFIG_SERVER_EVENT_TOKEN }}
+        REQUEST_ID: ${{ github.event.inputs.request_id }}
+        RUN_ID: ${{ github.run_id }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
+      run: echo stub
+  resolve-build-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+    - name: Resolve Selected Platforms
+      id: matrix
+      shell: bash
+      run: echo stub
+  build:
+    needs:
+    - prepare-release
+    - resolve-build-matrix
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+        - x
+        family:
+        - x
+        arch:
+        - x
+        platform:
+        - x
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+    - name: Configure Network Retries
+      shell: bash
+      run: echo stub
+    - name: Report Build Started
+      env:
+        CONFIG_SERVER_URL: ${{ secrets.CONFIG_SERVER_URL }}
+        CONFIG_SERVER_EVENT_TOKEN: ${{ secrets.CONFIG_SERVER_EVENT_TOKEN }}
+        REQUEST_ID: ${{ github.event.inputs.request_id }}
+        RUN_ID: ${{ github.run_id }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        PLATFORM_LABEL: ${{ matrix.platform }}
+        PLATFORM_KEY: ${{ matrix.platform }}
+      shell: bash
+      run: echo stub
+    - name: Checkout Build Scripts
+      uses: actions/checkout@v4
+      with:
+        path: build-server
+    - name: Checkout NexGen Source
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ env.NEXGEN_SOURCE_REPO }}
+        ref: ${{ github.event.inputs.branch || 'xiaov2board/Xboard' }}
+        token: ${{ secrets.WORKFLOW_TOKEN }}
+        submodules: recursive
+        path: source
+    - name: Setup Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: npm
+        cache-dependency-path: source/package-lock.json
+    - name: 识别 Windows 界面宿主
+      if: matrix.family == 'windows'
+      id: windows-runtime
+      shell: pwsh
+      run: echo stub
+    - name: 配置 Electron 下载缓存目录
+      if: matrix.family == 'windows' && steps.windows-runtime.outputs.runtime != 'tauri'
+      shell: pwsh
+      run: echo stub
+    - name: 缓存 Electron 与 Windows 安装工具
+      if: matrix.family == 'windows' && steps.windows-runtime.outputs.runtime != 'tauri'
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/nexgen-downloads
+        key: ${{ runner.os }}-nexgen-electron-downloads-${{ matrix.arch }}-${{ hashFiles('source/package-lock.json') }}
+        restore-keys: '${{ runner.os }}-nexgen-electron-downloads-${{ matrix.arch }}-
+
+          '
+    - name: Setup Go
+      uses: actions/setup-go@v6
+      with:
+        go-version: ${{ env.GO_VERSION }}
+        cache-dependency-path: 'source/core/mihomo/go.sum
+
+          source/core/android-bridge/go.sum
+
+          '
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@stable
+    - name: Install Windows Rust Target
+      if: matrix.family == 'windows'
+      shell: bash
+      run: echo stub
+    - name: 配置 Windows MSVC 编译环境
+      if: matrix.family == 'windows'
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: ${{ matrix.arch == 'arm64' && 'amd64_arm64' || 'amd64' }}
+    - name: Setup Java
+      if: matrix.family == 'android'
+      uses: actions/setup-java@v5
+      with:
+        distribution: temurin
+        java-version: '17'
+    - name: Setup Gradle Cache
+      if: matrix.family == 'android'
+      uses: gradle/actions/setup-gradle@v4
+    - name: 配置 Android Gradle 构建诊断
+      if: matrix.family == 'android'
+      run: echo stub
+    - name: Install Android SDK
+      if: matrix.family == 'android'
+      shell: bash
+      run: echo stub
+    - name: Install Dependencies
+      working-directory: source
+      env:
+        ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      run: echo stub
+    - name: 固定 Android Tauri CLI 版本
+      if: matrix.family == 'android'
+      working-directory: source
+      env:
+        NEXGEN_ANDROID_TAURI_CLI_VERSION: 2.12.4
+      run: echo stub
+    - name: Warm Go Module Cache
+      shell: bash
+      run: echo stub
+    - name: Apply Profile Config
+      shell: bash
+      env:
+        GH_TOKEN: ${{ secrets.WORKFLOW_TOKEN }}
+        PROFILE_NAME: ${{ github.event.inputs.profile }}
+        PROFILE_BRANCH: ${{ github.event.inputs.profile_branch }}
+      run: echo stub
+    - name: Apply App Version
+      shell: bash
+      run: echo stub
+    - name: Cache Android Rust Build
+      if: matrix.family == 'android'
+      uses: actions/cache@v4
+      with:
+        path: '~/.cargo/git
+
+          ~/.cargo/registry
+
+          source/src-tauri/target
+
+          '
+        key: ${{ runner.os }}-nexgen-react-android-rust-${{ hashFiles('source/src-tauri/Cargo.lock') }}
+        restore-keys: '${{ runner.os }}-nexgen-react-android-rust-
+
+          '
+    - name: Cache Android Core Artifacts
+      if: matrix.family == 'android'
+      uses: actions/cache@v4
+      with:
+        path: source/core/android-libs
+        key: ${{ runner.os }}-nexgen-react-android-core-${{ hashFiles('source/core/android-bridge/go.sum', 'source/core/android-bridge/**/*.go', 'source/core/mihomo/go.sum', 'source/core/mihomo/**/*.go', 'source/scripts/build-android-core.mjs') }}
+        restore-keys: '${{ runner.os }}-nexgen-react-android-core-
+
+          '
+    - name: Warm Rust Crate Cache
+      shell: bash
+      run: echo stub
+    - name: Install Image Tools
+      shell: bash
+      run: echo stub
+    - name: 安装 Linux 桌面打包依赖
+      if: matrix.family == 'linux'
+      run: echo stub
+    - name: Apply App Icon
+      shell: bash
+      run: echo stub
+    - name: Build Windows Package
+      if: matrix.family == 'windows'
+      working-directory: source
+      shell: pwsh
+      env:
+        GOMAXPROCS: '2'
+        GOFLAGS: -p=1
+        WINDOWS_ARCH: ${{ matrix.arch }}
+        WINDOWS_RUNTIME: ${{ steps.windows-runtime.outputs.runtime }}
+      run: echo stub
+    - name: Build macOS Package
+      if: matrix.family == 'macos'
+      working-directory: source
+      shell: bash
+      env:
+        GOMAXPROCS: '2'
+        GOFLAGS: -p=1
+      run: echo stub
+    - name: 构建 Linux 全部安装包
+      if: matrix.family == 'linux'
+      working-directory: source
+      env:
+        GOMAXPROCS: '2'
+        GOFLAGS: -p=1
+        LINUX_ARCH: ${{ matrix.arch }}
+        APPIMAGE_EXTRACT_AND_RUN: '1'
+      run: echo stub
+    - name: Build Android Package
+      if: matrix.family == 'android'
+      working-directory: source
+      shell: bash
+      env:
+        GOMAXPROCS: '2'
+        GOFLAGS: -p=1
+        NEXGEN_TARGET_PLATFORM: android
+        NEXGEN_SKIP_DESKTOP_CORE_RESOURCE: '1'
+        NEXGEN_ANDROID_SIGNING_BUNDLE: ${{ secrets.NEXGEN_ANDROID_SIGNING_BUNDLE }}
+        RUST_BACKTRACE: full
+      run: echo stub
+    - name: Diagnose NexGen Build Failure
+      if: failure()
+      shell: bash
+      run: echo stub
+    - name: Report Platform Failed
+      if: failure()
+      env:
+        CONFIG_SERVER_URL: ${{ secrets.CONFIG_SERVER_URL }}
+        CONFIG_SERVER_EVENT_TOKEN: ${{ secrets.CONFIG_SERVER_EVENT_TOKEN }}
+        REQUEST_ID: ${{ github.event.inputs.request_id }}
+        RUN_ID: ${{ github.run_id }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        PLATFORM_LABEL: ${{ matrix.platform }}
+        PLATFORM_KEY: ${{ matrix.platform }}
+      shell: bash
+      run: echo stub
+    - name: Upload Release Assets
+      shell: bash
+      env:
+        GH_TOKEN: ${{ secrets.WORKFLOW_TOKEN }}
+        RELEASE_ID: ${{ needs.prepare-release.outputs.release_id }}
+        UPLOAD_URL: ${{ needs.prepare-release.outputs.upload_url }}
+        APP_NAME: ${{ needs.prepare-release.outputs.app_name }}
+        SAFE_APP_NAME: ${{ needs.prepare-release.outputs.safe_app_name }}
+        VERSION: ${{ github.event.inputs.tag }}
+        CONFIG_SERVER_URL: ${{ secrets.CONFIG_SERVER_URL }}
+        CONFIG_SERVER_EVENT_TOKEN: ${{ secrets.CONFIG_SERVER_EVENT_TOKEN }}
+        REQUEST_ID: ${{ github.event.inputs.request_id }}
+        RUN_ID: ${{ github.run_id }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        PLATFORM_LABEL: ${{ matrix.platform }}
+        PLATFORM_KEY: ${{ matrix.platform }}
+      run: echo stub
+  merge-artifacts:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    needs:
+    - prepare-release
+    - build
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    steps:
+    - name: Configure Network Retries
+      shell: bash
+      run: echo stub
+    - name: Report Bundle Started
+      env:
+        CONFIG_SERVER_URL: ${{ secrets.CONFIG_SERVER_URL }}
+        CONFIG_SERVER_EVENT_TOKEN: ${{ secrets.CONFIG_SERVER_EVENT_TOKEN }}
+        REQUEST_ID: ${{ github.event.inputs.request_id }}
+        RUN_ID: ${{ github.run_id }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: echo stub
+    - name: Download release assets
+      env:
+        GH_TOKEN: ${{ secrets.WORKFLOW_TOKEN }}
+        RELEASE_ID: ${{ needs.prepare-release.outputs.release_id }}
+      run: echo stub
+    - name: Check artifacts
+      id: check
+      run: echo stub
+    - name: Generate sha256
+      if: steps.check.outputs.has_artifacts == 'true'
+      run: echo stub
+    - name: Package merged bundle
+      if: steps.check.outputs.has_artifacts == 'true'
+      id: package
+      run: echo stub
+    - name: Upload merged bundle to Draft Release
+      if: steps.check.outputs.has_artifacts == 'true'
+      env:
+        GH_TOKEN: ${{ secrets.WORKFLOW_TOKEN }}
+        RELEASE_ID: ${{ needs.prepare-release.outputs.release_id }}
+        RELEASE_UPLOAD_URL: ${{ needs.prepare-release.outputs.upload_url }}
+      run: echo stub
