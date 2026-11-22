@@ -54,12 +54,7 @@ concurrency:
   group: build-${{ github.event.inputs.profile }}
   cancel-in-progress: false
 
-permissions:
-  contents: read
-  id-token: write
-
 env:
-  CF_WORKER_URL: ${{ secrets.CF_WORKER_URL }}
   IS_STABLE: ${{ !contains(github.event.inputs.tag, '-') }}
   PROFILE_REPO: q42602736/Xboard-Mihomo_sub
   MIHOMO_SOURCE_REPO: q42602736/Xboard-Mihomo_sub
@@ -71,27 +66,14 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       release_id: ${{ steps.release.outputs.release_id }}
+      upload_url: ${{ steps.release.outputs.upload_url }}
       release_tag: ${{ steps.release.outputs.release_tag }}
       app_name: ${{ steps.release.outputs.app_name }}
     steps:
-      - name: 检出 Worker 调用工具
-        uses: actions/checkout@v4
-        with:
-          path: .worker-tools
-          persist-credentials: false
-      - name: 配置 Worker 身份认证
-        shell: bash
-        run: |
-          if [ -z "$CF_WORKER_URL" ]; then
-            echo "::error::缺少仓库 Secret CF_WORKER_URL"
-            exit 1
-          fi
-          echo "CF_WORKER_TOOLS=$GITHUB_WORKSPACE/.worker-tools/.github/scripts" >> "$GITHUB_ENV"
-          echo "BASH_ENV=$GITHUB_WORKSPACE/.worker-tools/.github/scripts/worker-curl.sh" >> "$GITHUB_ENV"
       - name: Validate Config Server Callback
         env:
-          CONFIG_SERVER_URL: ${{ secrets.CF_WORKER_URL }}
-          CONFIG_SERVER_EVENT_TOKEN: oidc
+          CONFIG_SERVER_URL: ${{ secrets.CONFIG_SERVER_URL }}
+          CONFIG_SERVER_EVENT_TOKEN: ${{ secrets.CONFIG_SERVER_EVENT_TOKEN }}
           REQUEST_ID: ${{ github.event.inputs.request_id }}
         run: |
           if [ -z "$REQUEST_ID" ]; then
@@ -110,7 +92,7 @@ jobs:
       - name: Prepare Draft Release
         id: release
         env:
-          GH_TOKEN: oidc
+          GH_TOKEN: ${{ secrets.WORKFLOW_TOKEN }}
         run: |
           PROFILE_NAME="${{ github.event.inputs.profile }}"
           PROFILE_BRANCH="${{ github.event.inputs.profile_branch }}"
@@ -126,7 +108,7 @@ jobs:
           ENCODED_PROFILE_PATH=$(node -e "console.log(process.argv[1].split('/').map(encodeURIComponent).join('/'))" "$PROFILE_PATH")
 
           API_RESPONSE=$(curl -s -H "Authorization: token $GH_TOKEN" \
-            "${CF_WORKER_URL%/}/github/repos/${{ env.PROFILE_REPO }}/contents/${ENCODED_PROFILE_PATH}?ref=${PROFILE_BRANCH}")
+            "https://api.github.com/repos/${{ env.PROFILE_REPO }}/contents/${ENCODED_PROFILE_PATH}?ref=${PROFILE_BRANCH}")
 
           if echo "$API_RESPONSE" | grep -q '"content"'; then
             PROFILE_YAML=$(echo "$API_RESPONSE" | node -e "
@@ -152,7 +134,7 @@ jobs:
           echo "Preparing draft release: ${APP_NAME} ${VERSION} (tag: ${RELEASE_TAG})"
 
           EXISTING_RESPONSE=$(curl -sS -H "Authorization: token $GH_TOKEN" \
-            "${CF_WORKER_URL%/}/github/repos/${{ github.repository }}/releases/tags/${ENCODED_RELEASE_TAG}")
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${ENCODED_RELEASE_TAG}")
           EXISTING_ID=$(printf '%s' "$EXISTING_RESPONSE" | node -e "
             const fs = require('fs');
             const data = JSON.parse(fs.readFileSync(0, 'utf8'));
@@ -162,7 +144,7 @@ jobs:
           if [ -n "$EXISTING_ID" ]; then
             echo "Release ${RELEASE_TAG} already exists, deleting..."
             curl -sS -X DELETE -H "Authorization: token $GH_TOKEN" \
-              "${CF_WORKER_URL%/}/github/repos/${{ github.repository }}/releases/${EXISTING_ID}" > /dev/null
+              "https://api.github.com/repos/${{ github.repository }}/releases/${EXISTING_ID}" > /dev/null
           fi
 
           RELEASE_PAYLOAD=$(node -e '
@@ -178,7 +160,7 @@ jobs:
           RELEASE_RESPONSE=$(curl -sS -X POST \
             -H "Authorization: token $GH_TOKEN" \
             -H "Content-Type: application/json" \
-            "${CF_WORKER_URL%/}/github/repos/${{ github.repository }}/releases" \
+            "https://api.github.com/repos/${{ github.repository }}/releases" \
             -d "$RELEASE_PAYLOAD")
 
           RELEASE_ID=$(printf '%s' "$RELEASE_RESPONSE" | node -e "
@@ -186,22 +168,28 @@ jobs:
             const data = JSON.parse(fs.readFileSync(0, 'utf8'));
             process.stdout.write(data && data.id ? String(data.id) : '');
           ")
+          UPLOAD_URL=$(printf '%s' "$RELEASE_RESPONSE" | node -e "
+            const fs = require('fs');
+            const data = JSON.parse(fs.readFileSync(0, 'utf8'));
+            process.stdout.write((data && data.upload_url ? String(data.upload_url) : '').replace(/\\{.*$/, ''));
+          ")
 
-          if [ -z "$RELEASE_ID" ]; then
+          if [ -z "$RELEASE_ID" ] || [ -z "$UPLOAD_URL" ]; then
             echo "Failed to create draft release"
             printf "%s" "$RELEASE_RESPONSE" | node -e 'const fs=require("fs"); const raw=fs.readFileSync(0,"utf8"); try { const data=JSON.parse(raw); console.log(JSON.stringify({message:data.message||"", status:data.status||"", documentation_url:data.documentation_url||"", errors:Array.isArray(data.errors)?data.errors.map(e=>({resource:e.resource,field:e.field,code:e.code})):[]})); } catch { console.log(String(raw).replace(/https?:\/\/\S+/g,"https://[redacted]").slice(0,1000)); }'
             exit 1
           fi
 
           echo "release_id=$RELEASE_ID" >> $GITHUB_OUTPUT
+          echo "upload_url=$UPLOAD_URL" >> $GITHUB_OUTPUT
           echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
           echo "app_name=$APP_NAME" >> $GITHUB_OUTPUT
           echo "Draft release ready: https://github.com/${{ github.repository }}/releases"
 
       - name: Bind Build Record
         env:
-          CONFIG_SERVER_URL: ${{ secrets.CF_WORKER_URL }}
-          CONFIG_SERVER_EVENT_TOKEN: oidc
+          CONFIG_SERVER_URL: ${{ secrets.CONFIG_SERVER_URL }}
+          CONFIG_SERVER_EVENT_TOKEN: ${{ secrets.CONFIG_SERVER_EVENT_TOKEN }}
           REQUEST_ID: ${{ github.event.inputs.request_id }}
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -233,9 +221,6 @@ jobs:
             -d "$PAYLOAD"
 
   build:
-    permissions:
-      contents: write
-      id-token: write
     needs: prepare-release
     runs-on: ${{ matrix.os }}
     defaults:
@@ -288,20 +273,6 @@ jobs:
             include_in_all: false
 
     steps:
-      - name: 检出 Worker 调用工具
-        uses: actions/checkout@v4
-        with:
-          path: .worker-tools
-          persist-credentials: false
-      - name: 配置 Worker 身份认证
-        shell: bash
-        run: |
-          if [ -z "$CF_WORKER_URL" ]; then
-            echo "::error::缺少仓库 Secret CF_WORKER_URL"
-            exit 1
-          fi
-          echo "CF_WORKER_TOOLS=$GITHUB_WORKSPACE/.worker-tools/.github/scripts" >> "$GITHUB_ENV"
-          echo "BASH_ENV=$GITHUB_WORKSPACE/.worker-tools/.github/scripts/worker-curl.sh" >> "$GITHUB_ENV"
       - name: Check if platform should run
         id: check
         run: |
@@ -356,8 +327,8 @@ jobs:
       - name: Report Build Started
         if: steps.check.outputs.should_run == 'true'
         env:
-          CONFIG_SERVER_URL: ${{ secrets.CF_WORKER_URL }}
-          CONFIG_SERVER_EVENT_TOKEN: oidc
+          CONFIG_SERVER_URL: ${{ secrets.CONFIG_SERVER_URL }}
+          CONFIG_SERVER_EVENT_TOKEN: ${{ secrets.CONFIG_SERVER_EVENT_TOKEN }}
           REQUEST_ID: ${{ github.event.inputs.request_id }}
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -418,19 +389,46 @@ jobs:
           echo "清理后磁盘使用情况:"
           df -h
 
-      - name: 通过 Worker 读取客户端源码
+      - name: 配置私有仓库 HTTPS 读取
         if: steps.check.outputs.should_run == 'true'
         shell: bash
         env:
-          SOURCE_REPO: ${{ github.event.inputs.core == 'xray' && env.XRAY_SOURCE_REPO || env.MIHOMO_SOURCE_REPO }}
-          SOURCE_REF: ${{ github.event.inputs.branch || github.event.inputs.tag }}
-        run: node "$CF_WORKER_TOOLS/checkout-via-worker.mjs"
+          WORKFLOW_READ_TOKEN: ${{ secrets.WORKFLOW_TOKEN }}
+        run: |
+          GIT_ACCESS_HEADER=$(node -e 'process.stdout.write(Buffer.from("x-access-token:" + process.env.WORKFLOW_READ_TOKEN).toString("base64"))')
+          echo "::add-mask::$GIT_ACCESS_HEADER"
+          git config --global http.https://github.com/.extraheader "Authorization: Basic $GIT_ACCESS_HEADER"
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git config --global --add url."https://github.com/".insteadOf "ssh://git@github.com/"
+
+      - name: Clone private repo
+        if: steps.check.outputs.should_run == 'true'
+        run: |
+          CORE="${{ github.event.inputs.core || 'mihomo' }}"
+          SOURCE_REPO="${{ env.MIHOMO_SOURCE_REPO }}"
+          if [ "$CORE" = "xray" ]; then
+            SOURCE_REPO="${{ env.XRAY_SOURCE_REPO }}"
+          fi
+          echo "Selected core: $CORE"
+          echo "Source repo: $SOURCE_REPO"
+          git clone "git@github.com:${SOURCE_REPO}.git" source
+          cd source
+          REQUESTED_REF="${{ github.event.inputs.branch }}"
+          SOURCE_REF="$REQUESTED_REF"
+          if [ -z "$SOURCE_REF" ]; then
+            SOURCE_REF="${{ github.event.inputs.tag }}"
+          fi
+          echo "Requested source ref: ${REQUESTED_REF:-<empty>}"
+          echo "Checking out source ref: $SOURCE_REF"
+          git checkout "$SOURCE_REF"
+          echo "Checked out commit: $(git rev-parse HEAD)"
+          git submodule update --init --recursive
 
       - name: Apply profile config
         id: config
         if: steps.check.outputs.should_run == 'true'
         env:
-          GH_TOKEN: oidc
+          GH_TOKEN: ${{ secrets.WORKFLOW_TOKEN }}
         run: |
           cd source
           PROFILE_NAME="${{ github.event.inputs.profile }}"
@@ -442,7 +440,7 @@ jobs:
           ENCODED_PROFILE_PATH=$(node -e "console.log(process.argv[1].split('/').map(encodeURIComponent).join('/'))" "$PROFILE_PATH")
           echo "Reading $PROFILE_PATH from ${{ env.PROFILE_REPO }}@$PROFILE_BRANCH..."
           API_RESPONSE=$(curl -s -H "Authorization: token $GH_TOKEN" \
-            "${CF_WORKER_URL%/}/github/repos/${{ env.PROFILE_REPO }}/contents/${ENCODED_PROFILE_PATH}?ref=${PROFILE_BRANCH}")
+            "https://api.github.com/repos/${{ env.PROFILE_REPO }}/contents/${ENCODED_PROFILE_PATH}?ref=${PROFILE_BRANCH}")
           if ! echo "$API_RESPONSE" | grep -q '"content"'; then
             echo "Error: Failed to read $PROFILE_PATH from profile repo branch $PROFILE_BRANCH"
             printf "%s" "$API_RESPONSE" | node -e 'const fs=require("fs"); const raw=fs.readFileSync(0,"utf8"); try { const data=JSON.parse(raw); console.log(JSON.stringify({message:data.message||"", status:data.status||"", documentation_url:data.documentation_url||""})); } catch { console.log(String(raw).replace(/https?:\/\/\S+/g,"https://[redacted]").slice(0,1000)); }'
@@ -1003,8 +1001,8 @@ jobs:
       - name: Build
         if: steps.check.outputs.should_run == 'true'
         env:
-          CONFIG_SERVER_URL: ${{ secrets.CF_WORKER_URL }}
-          CONFIG_SERVER_EVENT_TOKEN: oidc
+          CONFIG_SERVER_URL: ${{ secrets.CONFIG_SERVER_URL }}
+          CONFIG_SERVER_EVENT_TOKEN: ${{ secrets.CONFIG_SERVER_EVENT_TOKEN }}
           REQUEST_ID: ${{ github.event.inputs.request_id }}
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -1257,8 +1255,8 @@ jobs:
       - name: Report Platform Failed
         if: failure() && steps.check.outputs.should_run == 'true'
         env:
-          CONFIG_SERVER_URL: ${{ secrets.CF_WORKER_URL }}
-          CONFIG_SERVER_EVENT_TOKEN: oidc
+          CONFIG_SERVER_URL: ${{ secrets.CONFIG_SERVER_URL }}
+          CONFIG_SERVER_EVENT_TOKEN: ${{ secrets.CONFIG_SERVER_EVENT_TOKEN }}
           REQUEST_ID: ${{ github.event.inputs.request_id }}
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -1295,11 +1293,11 @@ jobs:
       - name: Upload dist to Draft Release
         if: success() && steps.check.outputs.should_run == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.WORKFLOW_TOKEN }}
           RELEASE_ID: ${{ needs.prepare-release.outputs.release_id }}
-          RELEASE_UPLOAD_URL: https://uploads.github.com/repos/${{ github.repository }}/releases/${{ needs.prepare-release.outputs.release_id }}/assets
-          CONFIG_SERVER_URL: ${{ secrets.CF_WORKER_URL }}
-          CONFIG_SERVER_EVENT_TOKEN: oidc
+          RELEASE_UPLOAD_URL: ${{ needs.prepare-release.outputs.upload_url }}
+          CONFIG_SERVER_URL: ${{ secrets.CONFIG_SERVER_URL }}
+          CONFIG_SERVER_EVENT_TOKEN: ${{ secrets.CONFIG_SERVER_EVENT_TOKEN }}
           REQUEST_ID: ${{ github.event.inputs.request_id }}
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -1355,7 +1353,7 @@ jobs:
           fi
 
           ASSETS_RESPONSE=$(curl -sS --fail -H "Authorization: token $GH_TOKEN" \
-            "${CF_WORKER_URL%/}/github/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets")
+            "https://api.github.com/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets")
 
           cd ./source/dist
           find . -type f | sort | while IFS= read -r file; do
@@ -1373,7 +1371,7 @@ jobs:
             if [ -n "$EXISTING_ASSET_ID" ]; then
               echo "Deleting existing release asset: $ASSET_NAME"
               curl -s -X DELETE -H "Authorization: token $GH_TOKEN" \
-                "${CF_WORKER_URL%/}/github/repos/${{ github.repository }}/releases/assets/${EXISTING_ASSET_ID}" > /dev/null
+                "https://api.github.com/repos/${{ github.repository }}/releases/assets/${EXISTING_ASSET_ID}" > /dev/null
             fi
 
             ENCODED_FILENAME=$(node -e "console.log(encodeURIComponent(process.argv[1]))" "$ASSET_NAME")
@@ -1413,7 +1411,7 @@ jobs:
 
           echo "=== Release assets after upload ==="
           FINAL_ASSET_COUNT=$(curl -sS --fail -H "Authorization: token $GH_TOKEN" \
-            "${CF_WORKER_URL%/}/github/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets" | node -e "
+            "https://api.github.com/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets" | node -e "
               const fs = require('fs');
               const data = JSON.parse(fs.readFileSync(0, 'utf8'));
               const assets = Array.isArray(data) ? data : [];
@@ -1431,9 +1429,6 @@ jobs:
           rm -f asset_count.txt
 
   build-linux:
-    permissions:
-      contents: write
-      id-token: write
     needs: prepare-release
     if: ${{ github.event.inputs.core != 'xray' }}
     runs-on: ${{ matrix.os }}
@@ -1462,20 +1457,6 @@ jobs:
             flutter_arch: arm64
 
     steps:
-      - name: 检出 Worker 调用工具
-        uses: actions/checkout@v4
-        with:
-          path: .worker-tools
-          persist-credentials: false
-      - name: 配置 Worker 身份认证
-        shell: bash
-        run: |
-          if [ -z "$CF_WORKER_URL" ]; then
-            echo "::error::缺少仓库 Secret CF_WORKER_URL"
-            exit 1
-          fi
-          echo "CF_WORKER_TOOLS=$GITHUB_WORKSPACE/.worker-tools/.github/scripts" >> "$GITHUB_ENV"
-          echo "BASH_ENV=$GITHUB_WORKSPACE/.worker-tools/.github/scripts/worker-curl.sh" >> "$GITHUB_ENV"
       - name: Check if platform should run
         id: check
         run: |
@@ -1531,8 +1512,8 @@ jobs:
       - name: Report Linux Build Started
         if: steps.check.outputs.should_run == 'true'
         env:
-          CONFIG_SERVER_URL: ${{ secrets.CF_WORKER_URL }}
-          CONFIG_SERVER_EVENT_TOKEN: oidc
+          CONFIG_SERVER_URL: ${{ secrets.CONFIG_SERVER_URL }}
+          CONFIG_SERVER_EVENT_TOKEN: ${{ secrets.CONFIG_SERVER_EVENT_TOKEN }}
           REQUEST_ID: ${{ github.event.inputs.request_id }}
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -1565,19 +1546,37 @@ jobs:
             -H "X-Build-Event-Token: $CONFIG_SERVER_EVENT_TOKEN" \
             -d "$PAYLOAD" || true
 
-      - name: 通过 Worker 读取客户端源码
+      - name: Clone private repo
         if: steps.check.outputs.should_run == 'true'
-        shell: bash
-        env:
-          SOURCE_REPO: ${{ github.event.inputs.core == 'xray' && env.XRAY_SOURCE_REPO || env.MIHOMO_SOURCE_REPO }}
-          SOURCE_REF: ${{ github.event.inputs.branch || github.event.inputs.tag }}
-        run: node "$CF_WORKER_TOOLS/checkout-via-worker.mjs"
+        run: |
+          git config --global url."https://x-access-token:${{ secrets.WORKFLOW_TOKEN }}@github.com/".insteadOf "git@github.com:"
+          git config --global url."https://x-access-token:${{ secrets.WORKFLOW_TOKEN }}@github.com/".insteadOf "ssh://git@github.com/"
+          CORE="${{ github.event.inputs.core || 'mihomo' }}"
+          SOURCE_REPO="${{ env.MIHOMO_SOURCE_REPO }}"
+          if [ "$CORE" = "xray" ]; then
+            SOURCE_REPO="${{ env.XRAY_SOURCE_REPO }}"
+          fi
+          echo "Selected core: $CORE"
+          echo "Source repo: $SOURCE_REPO"
+          git clone "https://x-access-token:${{ secrets.WORKFLOW_TOKEN }}@github.com/${SOURCE_REPO}.git" source
+          cd source
+          REQUESTED_REF="${{ github.event.inputs.branch }}"
+          SOURCE_REF="$REQUESTED_REF"
+          if [ -z "$SOURCE_REF" ]; then
+            SOURCE_REF="${{ github.event.inputs.tag }}"
+          fi
+          echo "Requested source ref: ${REQUESTED_REF:-<empty>}"
+          echo "Checking out source ref: $SOURCE_REF"
+          git checkout "$SOURCE_REF"
+          echo "Checked out commit: $(git rev-parse HEAD)"
+          git submodule sync --recursive
+          git submodule update --init --recursive
 
       - name: Apply profile config
         id: config
         if: steps.check.outputs.should_run == 'true'
         env:
-          GH_TOKEN: oidc
+          GH_TOKEN: ${{ secrets.WORKFLOW_TOKEN }}
         run: |
           cd source
           PROFILE_NAME="${{ github.event.inputs.profile }}"
@@ -1588,7 +1587,7 @@ jobs:
           ENCODED_PROFILE_PATH=$(node -e "console.log(process.argv[1].split('/').map(encodeURIComponent).join('/'))" "$PROFILE_PATH")
           echo "Reading $PROFILE_PATH from ${{ env.PROFILE_REPO }}@$PROFILE_BRANCH..."
           API_RESPONSE=$(curl -s -H "Authorization: token $GH_TOKEN" \
-            "${CF_WORKER_URL%/}/github/repos/${{ env.PROFILE_REPO }}/contents/${ENCODED_PROFILE_PATH}?ref=${PROFILE_BRANCH}")
+            "https://api.github.com/repos/${{ env.PROFILE_REPO }}/contents/${ENCODED_PROFILE_PATH}?ref=${PROFILE_BRANCH}")
           if ! echo "$API_RESPONSE" | grep -q '"content"'; then
             echo "Error: Failed to read $PROFILE_PATH from profile repo branch $PROFILE_BRANCH"
             printf "%s" "$API_RESPONSE" | node -e 'const fs=require("fs"); const raw=fs.readFileSync(0,"utf8"); try { const data=JSON.parse(raw); console.log(JSON.stringify({message:data.message||"", status:data.status||"", documentation_url:data.documentation_url||""})); } catch { console.log(String(raw).replace(/https?:\/\/\S+/g,"https://[redacted]").slice(0,1000)); }'
@@ -1865,8 +1864,8 @@ jobs:
       - name: Report Linux Platform Failed
         if: failure() && steps.check.outputs.should_run == 'true'
         env:
-          CONFIG_SERVER_URL: ${{ secrets.CF_WORKER_URL }}
-          CONFIG_SERVER_EVENT_TOKEN: oidc
+          CONFIG_SERVER_URL: ${{ secrets.CONFIG_SERVER_URL }}
+          CONFIG_SERVER_EVENT_TOKEN: ${{ secrets.CONFIG_SERVER_EVENT_TOKEN }}
           REQUEST_ID: ${{ github.event.inputs.request_id }}
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -1903,11 +1902,11 @@ jobs:
       - name: Upload dist to Draft Release
         if: success() && steps.check.outputs.should_run == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.WORKFLOW_TOKEN }}
           RELEASE_ID: ${{ needs.prepare-release.outputs.release_id }}
-          RELEASE_UPLOAD_URL: https://uploads.github.com/repos/${{ github.repository }}/releases/${{ needs.prepare-release.outputs.release_id }}/assets
-          CONFIG_SERVER_URL: ${{ secrets.CF_WORKER_URL }}
-          CONFIG_SERVER_EVENT_TOKEN: oidc
+          RELEASE_UPLOAD_URL: ${{ needs.prepare-release.outputs.upload_url }}
+          CONFIG_SERVER_URL: ${{ secrets.CONFIG_SERVER_URL }}
+          CONFIG_SERVER_EVENT_TOKEN: ${{ secrets.CONFIG_SERVER_EVENT_TOKEN }}
           REQUEST_ID: ${{ github.event.inputs.request_id }}
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -1963,7 +1962,7 @@ jobs:
           fi
 
           ASSETS_RESPONSE=$(curl -sS --fail -H "Authorization: token $GH_TOKEN" \
-            "${CF_WORKER_URL%/}/github/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets")
+            "https://api.github.com/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets")
 
           cd ./source/dist
           find . -type f | sort | while IFS= read -r file; do
@@ -1981,7 +1980,7 @@ jobs:
             if [ -n "$EXISTING_ASSET_ID" ]; then
               echo "Deleting existing release asset: $ASSET_NAME"
               curl -s -X DELETE -H "Authorization: token $GH_TOKEN" \
-                "${CF_WORKER_URL%/}/github/repos/${{ github.repository }}/releases/assets/${EXISTING_ASSET_ID}" > /dev/null
+                "https://api.github.com/repos/${{ github.repository }}/releases/assets/${EXISTING_ASSET_ID}" > /dev/null
             fi
 
             ENCODED_FILENAME=$(node -e "console.log(encodeURIComponent(process.argv[1]))" "$ASSET_NAME")
@@ -2021,7 +2020,7 @@ jobs:
 
           echo "=== Release assets after upload ==="
           FINAL_ASSET_COUNT=$(curl -sS --fail -H "Authorization: token $GH_TOKEN" \
-            "${CF_WORKER_URL%/}/github/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets" | node -e "
+            "https://api.github.com/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets" | node -e "
               const fs = require('fs');
               const data = JSON.parse(fs.readFileSync(0, 'utf8'));
               const assets = Array.isArray(data) ? data : [];
@@ -2039,9 +2038,6 @@ jobs:
           rm -f asset_count.txt
 
   build-router:
-    permissions:
-      contents: write
-      id-token: write
     needs: prepare-release
     if: ${{ github.event.inputs.core != 'xray' }}
     runs-on: ubuntu-24.04
@@ -2059,32 +2055,18 @@ jobs:
             ipk_arch: aarch64_generic
             label: 软路由 ARM64
     env:
-      GH_TOKEN: oidc
+      GH_TOKEN: ${{ secrets.WORKFLOW_TOKEN }}
       GH_REPO: ${{ github.repository }}
       RELEASE_ID: ${{ needs.prepare-release.outputs.release_id }}
       RELEASE_TAG: ${{ needs.prepare-release.outputs.release_tag }}
-      CONFIG_SERVER_URL: ${{ secrets.CF_WORKER_URL }}
-      CONFIG_SERVER_EVENT_TOKEN: oidc
+      CONFIG_SERVER_URL: ${{ secrets.CONFIG_SERVER_URL }}
+      CONFIG_SERVER_EVENT_TOKEN: ${{ secrets.CONFIG_SERVER_EVENT_TOKEN }}
       REQUEST_ID: ${{ github.event.inputs.request_id }}
       RUN_ID: ${{ github.run_id }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       PLATFORM_KEY: openwrt-${{ matrix.arch }}
       PLATFORM_LABEL: ${{ matrix.label }}
     steps:
-      - name: 检出 Worker 调用工具
-        uses: actions/checkout@v4
-        with:
-          path: .worker-tools
-          persist-credentials: false
-      - name: 配置 Worker 身份认证
-        shell: bash
-        run: |
-          if [ -z "$CF_WORKER_URL" ]; then
-            echo "::error::缺少仓库 Secret CF_WORKER_URL"
-            exit 1
-          fi
-          echo "CF_WORKER_TOOLS=$GITHUB_WORKSPACE/.worker-tools/.github/scripts" >> "$GITHUB_ENV"
-          echo "BASH_ENV=$GITHUB_WORKSPACE/.worker-tools/.github/scripts/worker-curl.sh" >> "$GITHUB_ENV"
       - name: 检查是否打包软路由
         id: check
         env:
@@ -2102,16 +2084,19 @@ jobs:
         if: steps.check.outputs.should_run == 'true'
         uses: actions/checkout@v4
         with:
-          persist-credentials: false
           path: build-server
+          persist-credentials: false
 
-      - name: 通过 Worker 读取软路由源码
+      - name: 检出老客户端源码
         if: steps.check.outputs.should_run == 'true'
-        shell: bash
-        env:
-          SOURCE_REPO: ${{ env.MIHOMO_SOURCE_REPO }}
-          SOURCE_REF: ${{ github.event.inputs.branch || github.event.inputs.tag }}
-        run: node "$CF_WORKER_TOOLS/checkout-via-worker.mjs"
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.MIHOMO_SOURCE_REPO }}
+          ref: ${{ github.event.inputs.branch || github.event.inputs.tag }}
+          token: ${{ secrets.WORKFLOW_TOKEN }}
+          submodules: recursive
+          persist-credentials: false
+          path: source
 
       - name: 准备 Go 环境
         if: steps.check.outputs.should_run == 'true'
@@ -2206,8 +2191,6 @@ jobs:
 
       - name: 上传软路由安装包
         if: steps.check.outputs.should_run == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           shopt -s nullglob
           PACKAGES=(source/dist/router/*.ipk)
@@ -2258,31 +2241,14 @@ jobs:
 
   # 从 Draft Release 汇总所有平台产物并回传合集包
   merge-artifacts:
-    permissions:
-      contents: write
-      id-token: write
     runs-on: ubuntu-latest
     needs: [ prepare-release, build, build-linux, build-router ]
     if: ${{ !cancelled() && needs.build.result == 'success' && (needs.build-linux.result == 'success' || needs.build-linux.result == 'skipped') && (needs.build-router.result == 'success' || needs.build-router.result == 'skipped') }}
     steps:
-      - name: 检出 Worker 调用工具
-        uses: actions/checkout@v4
-        with:
-          path: .worker-tools
-          persist-credentials: false
-      - name: 配置 Worker 身份认证
-        shell: bash
-        run: |
-          if [ -z "$CF_WORKER_URL" ]; then
-            echo "::error::缺少仓库 Secret CF_WORKER_URL"
-            exit 1
-          fi
-          echo "CF_WORKER_TOOLS=$GITHUB_WORKSPACE/.worker-tools/.github/scripts" >> "$GITHUB_ENV"
-          echo "BASH_ENV=$GITHUB_WORKSPACE/.worker-tools/.github/scripts/worker-curl.sh" >> "$GITHUB_ENV"
       - name: Report Bundle Started
         env:
-          CONFIG_SERVER_URL: ${{ secrets.CF_WORKER_URL }}
-          CONFIG_SERVER_EVENT_TOKEN: oidc
+          CONFIG_SERVER_URL: ${{ secrets.CONFIG_SERVER_URL }}
+          CONFIG_SERVER_EVENT_TOKEN: ${{ secrets.CONFIG_SERVER_EVENT_TOKEN }}
           REQUEST_ID: ${{ github.event.inputs.request_id }}
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -2307,13 +2273,13 @@ jobs:
 
       - name: Download release assets
         env:
-          GH_TOKEN: oidc
+          GH_TOKEN: ${{ secrets.WORKFLOW_TOKEN }}
           RELEASE_ID: ${{ needs.prepare-release.outputs.release_id }}
         run: |
           mkdir -p ./dist
 
           ASSETS_RESPONSE=$(curl -sS --fail -H "Authorization: token $GH_TOKEN" \
-            "${CF_WORKER_URL%/}/github/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets")
+            "https://api.github.com/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets")
 
           printf '%s' "$ASSETS_RESPONSE" | node -e "
             const fs = require('fs');
@@ -2329,7 +2295,7 @@ jobs:
             curl -L -sS --fail \
               -H "Authorization: token $GH_TOKEN" \
               -H "Accept: application/octet-stream" \
-              "${CF_WORKER_URL%/}/github/repos/${{ github.repository }}/releases/assets/${asset_id}" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/assets/${asset_id}" \
               -o "./dist/${asset_name}"
           done
 
@@ -2395,13 +2361,13 @@ jobs:
       - name: Upload merged bundle to Draft Release
         if: steps.check.outputs.has_artifacts == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.WORKFLOW_TOKEN }}
           RELEASE_ID: ${{ needs.prepare-release.outputs.release_id }}
-          RELEASE_UPLOAD_URL: https://uploads.github.com/repos/${{ github.repository }}/releases/${{ needs.prepare-release.outputs.release_id }}/assets
+          RELEASE_UPLOAD_URL: ${{ needs.prepare-release.outputs.upload_url }}
         run: |
           PACKAGE_NAME="${{ steps.package.outputs.package_name }}"
           ASSETS_RESPONSE=$(curl -sS --fail -H "Authorization: token $GH_TOKEN" \
-            "${CF_WORKER_URL%/}/github/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets")
+            "https://api.github.com/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets")
           printf '%s' "$ASSETS_RESPONSE" | node -e '
             const fs = require("fs");
             const packageName = process.argv[1];
@@ -2424,7 +2390,7 @@ jobs:
             [ -n "$asset_id" ] || continue
             echo "Deleting existing bundle asset: $asset_name"
             curl -sS --fail -X DELETE -H "Authorization: token $GH_TOKEN" \
-              "${CF_WORKER_URL%/}/github/repos/${{ github.repository }}/releases/assets/${asset_id}" > /dev/null
+              "https://api.github.com/repos/${{ github.repository }}/releases/assets/${asset_id}" > /dev/null
           done
 
           cd ./release
@@ -2512,7 +2478,7 @@ jobs:
 
           echo "=== Release assets after merged bundle upload ==="
           curl -sS --fail -H "Authorization: token $GH_TOKEN" \
-            "${CF_WORKER_URL%/}/github/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets" | node -e "
+            "https://api.github.com/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets" | node -e "
               const fs = require('fs');
               const data = JSON.parse(fs.readFileSync(0, 'utf8'));
               const assets = Array.isArray(data) ? data : [];
@@ -2529,24 +2495,10 @@ jobs:
     needs: [ prepare-release, build, build-linux, build-router, merge-artifacts ]
     if: ${{ always() }}
     steps:
-      - name: 检出 Worker 调用工具
-        uses: actions/checkout@v4
-        with:
-          path: .worker-tools
-          persist-credentials: false
-      - name: 配置 Worker 身份认证
-        shell: bash
-        run: |
-          if [ -z "$CF_WORKER_URL" ]; then
-            echo "::error::缺少仓库 Secret CF_WORKER_URL"
-            exit 1
-          fi
-          echo "CF_WORKER_TOOLS=$GITHUB_WORKSPACE/.worker-tools/.github/scripts" >> "$GITHUB_ENV"
-          echo "BASH_ENV=$GITHUB_WORKSPACE/.worker-tools/.github/scripts/worker-curl.sh" >> "$GITHUB_ENV"
       - name: Complete Build Record
         env:
-          CONFIG_SERVER_URL: ${{ secrets.CF_WORKER_URL }}
-          CONFIG_SERVER_EVENT_TOKEN: oidc
+          CONFIG_SERVER_URL: ${{ secrets.CONFIG_SERVER_URL }}
+          CONFIG_SERVER_EVENT_TOKEN: ${{ secrets.CONFIG_SERVER_EVENT_TOKEN }}
           REQUEST_ID: ${{ github.event.inputs.request_id }}
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

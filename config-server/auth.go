@@ -44,23 +44,11 @@ func generateJWT(codeID int, codeName, permissions string, allowedProfiles []str
 		},
 	}
 
-	if workerEnabled() {
-		return signWorkerToken(claims, "session")
-	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString([]byte(cfg.JWTSecret))
 }
 
 func parseJWT(tokenString string) (*Claims, error) {
-	if workerEnabled() {
-		var result struct {
-			Claims Claims `json:"claims"`
-		}
-		if err := callWorkerJSON("/v1/auth/verify", map[string]string{"token": tokenString, "kind": "session"}, &result); err != nil {
-			return nil, err
-		}
-		return &result.Claims, nil
-	}
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
 		return []byte(cfg.JWTSecret), nil
 	})
@@ -89,10 +77,6 @@ func generateBuildAssetDownloadToken(recordID, assetID int64, ttl time.Duration)
 		},
 	}
 
-	if workerEnabled() {
-		tokenString, err := signWorkerToken(claims, "download")
-		return tokenString, expireAt, err
-	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	tokenString, err := token.SignedString([]byte(cfg.JWTSecret))
 	if err != nil {
@@ -102,15 +86,6 @@ func generateBuildAssetDownloadToken(recordID, assetID int64, ttl time.Duration)
 }
 
 func parseBuildAssetDownloadToken(tokenString string) (*BuildAssetDownloadClaims, error) {
-	if workerEnabled() {
-		var result struct {
-			Claims BuildAssetDownloadClaims `json:"claims"`
-		}
-		if err := callWorkerJSON("/v1/auth/verify", map[string]string{"token": tokenString, "kind": "download"}, &result); err != nil {
-			return nil, err
-		}
-		return &result.Claims, nil
-	}
 	token, err := jwt.ParseWithClaims(tokenString, &BuildAssetDownloadClaims{}, func(token *jwt.Token) (interface{}, error) {
 		return []byte(cfg.JWTSecret), nil
 	})

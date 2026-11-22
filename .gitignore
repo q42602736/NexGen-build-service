@@ -97,8 +97,3 @@ config-server/secure_log_decrypt.go
 .serena/
 .ace-tool/
 .keys-tmp/
-
-# Cloudflare 本地凭证和运行缓存
-cloudflare-worker/.dev.vars*
-cloudflare-worker/.env*
-cloudflare-worker/.wrangler/

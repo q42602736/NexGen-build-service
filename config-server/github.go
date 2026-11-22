@@ -101,6 +101,15 @@ func NewGitHubClient(token, owner, repo, branch string) *GitHubClient {
 	return &GitHubClient{Token: token, Owner: owner, Repo: repo, Branch: branch}
 }
 
+func (g *GitHubClient) newGitHubRequest(method, upstream string, body io.Reader) (*http.Request, error) {
+	req, err := http.NewRequest(method, upstream, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "token "+g.Token)
+	return req, nil
+}
+
 func normalizeGitHubAPIStatPath(rawURL string) string {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {

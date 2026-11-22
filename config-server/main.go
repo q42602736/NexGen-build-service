@@ -8,12 +8,10 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/joho/godotenv"
 )
 
 //go:embed web
@@ -22,8 +20,6 @@ var webFS embed.FS
 type Config struct {
 	Port                string
 	ListenHost          string
-	WorkerURL           string
-	WorkerToken         string
 	GithubToken         string
 	GithubOwner         string
 	GithubRepo          string
@@ -46,13 +42,9 @@ type Config struct {
 var cfg Config
 
 func loadConfig() {
-	godotenv.Load(getEnv("CONFIG_ENV_FILE", ".env"))
-
 	cfg = Config{
 		Port:                getEnv("PORT", "8080"),
 		ListenHost:          getEnv("LISTEN_HOST", "127.0.0.1"),
-		WorkerURL:           strings.TrimRight(strings.TrimSpace(getEnv("CF_WORKER_URL", "")), "/"),
-		WorkerToken:         getEnv("CF_WORKER_TOKEN", ""),
 		GithubToken:         getEnv("GITHUB_TOKEN", ""),
 		GithubOwner:         mustEnv("GITHUB_OWNER"),
 		GithubRepo:          mustEnv("GITHUB_REPO"),
@@ -71,20 +63,12 @@ func loadConfig() {
 		AdminPassword:       getEnv("ADMIN_PASSWORD", ""),
 		ConfigFilepath:      getEnv("CONFIG_FILEPATH", "assets/config/xboard.config.yaml"),
 	}
-	if workerEnabled() {
-		if !strings.HasPrefix(cfg.WorkerURL, "https://") || len(cfg.WorkerToken) < 32 {
-			log.Fatal("Cloudflare Worker 地址或调用凭证配置无效")
-		}
-		// Worker 模式不保留旧凭证，也不会在服务故障时回退到直连。
-		cfg.GithubToken, cfg.JWTSecret, cfg.AdminPassword = "", "", ""
-		cfg.BuildEventToken, cfg.GitHubWebhookSecret = "", ""
-		for _, key := range []string{"GITHUB_TOKEN", "JWT_SECRET", "ADMIN_PASSWORD", "BUILD_EVENT_TOKEN", "GITHUB_WEBHOOK_SECRET"} {
-			os.Unsetenv(key)
-		}
-	} else {
-		cfg.GithubToken = mustEnv("GITHUB_TOKEN")
-		cfg.JWTSecret = mustEnv("JWT_SECRET")
-		cfg.AdminPassword = mustEnv("ADMIN_PASSWORD")
+	cfg.GithubToken = mustEnv("GITHUB_TOKEN")
+	cfg.JWTSecret = mustEnv("JWT_SECRET")
+	cfg.AdminPassword = mustEnv("ADMIN_PASSWORD")
+	// 配置只来自专用构建，清除可能由启动器继承的旧凭证变量。
+	for _, key := range []string{"GITHUB_TOKEN", "JWT_SECRET", "ADMIN_PASSWORD", "BUILD_EVENT_TOKEN", "GITHUB_WEBHOOK_SECRET", "SECURE_LOG_PRIVATE_KEY"} {
+		os.Unsetenv(key)
 	}
 
 	if cfg.BuildOwner == "" {
@@ -108,22 +92,29 @@ func loadConfig() {
 }
 
 func getEnv(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
+	if v := embeddedEnvironment[key]; v != "" {
 		return v
 	}
 	return fallback
 }
 
 func mustEnv(key string) string {
-	v := os.Getenv(key)
+	v := embeddedEnvironment[key]
 	if v == "" {
-		log.Fatalf("必需的环境变量 %s 未设置", key)
+		log.Fatalf("专用二进制缺少内置配置 %s，请重新构建", key)
 	}
 	return v
 }
 
 func main() {
 	loadConfig()
+	if len(os.Args) == 2 && os.Args[1] == "--check-config" {
+		if _, err := loadSecureLogPrivateKey(); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println("内置配置及日志私钥检查通过")
+		return
+	}
 	initDB()
 
 	gh := NewGitHubClient(

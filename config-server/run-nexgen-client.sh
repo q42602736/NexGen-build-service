@@ -5,11 +5,6 @@ set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 cd "$SCRIPT_DIR"
 
-if [ ! -f .env ]; then
-  echo "未找到 .env，请先上传并配置 .env 文件" >&2
-  exit 1
-fi
-
 if [ -n "${APP_BINARY:-}" ]; then
   BINARY="$APP_BINARY"
 else

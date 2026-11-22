@@ -830,12 +830,7 @@ func (h *Handlers) AdminLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	validPassword, err := verifyAdminPassword(req.Password)
-	if err != nil {
-		jsonError(w, "认证服务暂时不可用", 503)
-		return
-	}
-	if !validPassword {
+	if req.Password != cfg.AdminPassword {
 		jsonError(w, "密码错误", 401)
 		return
 	}
@@ -3602,9 +3597,6 @@ func secureCompareString(expected, actual string) bool {
 }
 
 func authorizeBuildEventRequest(r *http.Request) bool {
-	if workerEnabled() {
-		return secureCompareString(cfg.WorkerToken, r.Header.Get("X-Worker-Callback-Token"))
-	}
 	return secureCompareString(cfg.BuildEventToken, r.Header.Get("X-Build-Event-Token"))
 }
 
@@ -3875,7 +3867,7 @@ func (h *Handlers) InternalUpdateBuildProgress(w http.ResponseWriter, r *http.Re
 }
 
 func (h *Handlers) HandleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
-	if !workerEnabled() && strings.TrimSpace(cfg.GitHubWebhookSecret) == "" {
+	if strings.TrimSpace(cfg.GitHubWebhookSecret) == "" {
 		jsonError(w, "未启用 GitHub webhook", 503)
 		return
 	}
@@ -3885,11 +3877,7 @@ func (h *Handlers) HandleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "读取 webhook 请求失败", 400)
 		return
 	}
-	secret, signature := cfg.GitHubWebhookSecret, r.Header.Get("X-Hub-Signature-256")
-	if workerEnabled() {
-		secret, signature = cfg.WorkerToken, "sha256="+r.Header.Get("X-Worker-Webhook-Signature")
-	}
-	if !verifyGitHubWebhookSignature(secret, signature, body) {
+	if !verifyGitHubWebhookSignature(cfg.GitHubWebhookSecret, r.Header.Get("X-Hub-Signature-256"), body) {
 		jsonError(w, "webhook 签名校验失败", 401)
 		return
 	}

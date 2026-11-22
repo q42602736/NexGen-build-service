@@ -2,12 +2,21 @@ package main
 
 import (
 	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 )
 
 const (
@@ -32,6 +41,37 @@ type secureLogEvent struct {
 	Message string `json:"message"`
 	Error   string `json:"error"`
 	Stack   string `json:"stack"`
+}
+
+var secureLogKeyCache struct {
+	once sync.Once
+	key  *rsa.PrivateKey
+	err  error
+}
+
+func loadSecureLogPrivateKey() (*rsa.PrivateKey, error) {
+	secureLogKeyCache.once.Do(func() {
+		block, _ := pem.Decode([]byte(getEnv("SECURE_LOG_PRIVATE_KEY", "")))
+		if block == nil {
+			secureLogKeyCache.err = errors.New("专用二进制未包含有效的日志解密私钥")
+			return
+		}
+		if block.Type == "RSA PRIVATE KEY" {
+			secureLogKeyCache.key, secureLogKeyCache.err = x509.ParsePKCS1PrivateKey(block.Bytes)
+			return
+		}
+		parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+		if err != nil {
+			secureLogKeyCache.err = errors.New("日志解密私钥格式无效")
+			return
+		}
+		var ok bool
+		secureLogKeyCache.key, ok = parsed.(*rsa.PrivateKey)
+		if !ok {
+			secureLogKeyCache.err = errors.New("日志解密私钥类型无效")
+		}
+	})
+	return secureLogKeyCache.key, secureLogKeyCache.err
 }
 
 func (h *Handlers) DecryptSecureLog(w http.ResponseWriter, r *http.Request) {
@@ -76,9 +116,6 @@ func (h *Handlers) DecryptSecureLog(w http.ResponseWriter, r *http.Request) {
 }
 
 func decryptSecureLogBytes(data []byte) (string, error) {
-	if !workerEnabled() {
-		return "", errors.New("日志解密需要配置 Cloudflare Worker")
-	}
 	lines := bytes.Split(data, []byte{'\n'})
 	if len(lines) == 0 {
 		return "", errors.New("无效日志文件：内容为空")
@@ -94,44 +131,50 @@ func decryptSecureLogBytes(data []byte) (string, error) {
 	if header.Key == "" {
 		return "", errors.New("日志头缺少加密会话密钥")
 	}
+	privateKey, err := loadSecureLogPrivateKey()
+	if err != nil {
+		return "", err
+	}
+	wrappedKey, err := base64.StdEncoding.DecodeString(header.Key)
+	if err != nil {
+		return "", errors.New("日志会话密钥编码无效")
+	}
+	rawKey, err := rsa.DecryptOAEP(sha256.New(), rand.Reader, privateKey, wrappedKey, nil)
+	if err != nil {
+		return "", errors.New("日志会话密钥解密失败")
+	}
+	block, err := aes.NewCipher(rawKey)
+	if err != nil {
+		return "", errors.New("日志会话密钥长度无效")
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", errors.New("日志解密初始化失败")
+	}
 	var output strings.Builder
-	for offset := 1; offset < len(lines); offset += 32 {
-		end := offset + 32
-		if end > len(lines) {
-			end = len(lines)
-		}
-		batch := []string{}
-		positions := []int{}
-		for index := offset; index < end; index++ {
-			line := strings.TrimSpace(string(lines[index]))
-			if line != "" {
-				batch = append(batch, line)
-				positions = append(positions, index+1)
-			}
-		}
-		if len(batch) == 0 {
+	for index := 1; index < len(lines); index++ {
+		line := strings.TrimSpace(string(lines[index]))
+		if line == "" {
 			continue
 		}
-		var result struct {
-			Lines []struct {
-				Text  string `json:"text"`
-				Error string `json:"error"`
-			} `json:"lines"`
+		var record secureLogRecord
+		if json.Unmarshal([]byte(line), &record) != nil {
+			output.WriteString(fmt.Sprintf("[日志解密错误 行=%d] 日志记录格式无效\n", index+1))
+			continue
 		}
-		if err := callWorkerJSON("/v1/logs/decrypt", map[string]interface{}{"header": header, "lines": batch}, &result); err != nil {
-			return "", err
+		nonce, nonceErr := base64.StdEncoding.DecodeString(record.Nonce)
+		data, dataErr := base64.StdEncoding.DecodeString(record.Ciphertext)
+		if nonceErr != nil || dataErr != nil || len(nonce) != gcm.NonceSize() {
+			output.WriteString(fmt.Sprintf("[日志解密错误 行=%d] 日志记录编码无效\n", index+1))
+			continue
 		}
-		if len(result.Lines) != len(batch) {
-			return "", errors.New("日志解密响应数量不一致")
+		plain, err := gcm.Open(nil, nonce, data, nil)
+		if err != nil {
+			output.WriteString(fmt.Sprintf("[日志解密错误 行=%d] 日志记录解密失败\n", index+1))
+			continue
 		}
-		for index, line := range result.Lines {
-			if line.Error != "" {
-				output.WriteString(fmt.Sprintf("[日志解密错误 行=%d] %s\n", positions[index], line.Error))
-				continue
-			}
-			output.WriteString(formatSecureLogEvent([]byte(line.Text)))
-			output.WriteString("\n")
-		}
+		output.WriteString(formatSecureLogEvent(plain))
+		output.WriteString("\n")
 	}
 	return output.String(), nil
 }

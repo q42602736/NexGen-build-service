@@ -48,12 +48,7 @@ concurrency:
   group: nexgen-react-${{ github.event.inputs.profile }}
   cancel-in-progress: false
 
-permissions:
-  contents: read
-  id-token: write
-
 env:
-  CF_WORKER_URL: ${{ secrets.CF_WORKER_URL }}
   PROFILE_REPO: q42602736/NexGen-client-React
   NEXGEN_SOURCE_REPO: q42602736/NexGen-client-React
   NODE_VERSION: '22'
@@ -77,29 +72,16 @@ jobs:
         shell: bash
     outputs:
       release_id: ${{ steps.release.outputs.release_id }}
+      upload_url: ${{ steps.release.outputs.upload_url }}
       release_tag: ${{ steps.release.outputs.release_tag }}
       app_name: ${{ steps.config.outputs.app_name }}
       artifact_app_name: ${{ steps.config.outputs.artifact_app_name }}
       safe_app_name: ${{ steps.config.outputs.safe_app_name }}
     steps:
-      - name: 检出 Worker 调用工具
-        uses: actions/checkout@v4
-        with:
-          path: .worker-tools
-          persist-credentials: false
-      - name: 配置 Worker 身份认证
-        shell: bash
-        run: |
-          if [ -z "$CF_WORKER_URL" ]; then
-            echo "::error::缺少仓库 Secret CF_WORKER_URL"
-            exit 1
-          fi
-          echo "CF_WORKER_TOOLS=$GITHUB_WORKSPACE/.worker-tools/.github/scripts" >> "$GITHUB_ENV"
-          echo "BASH_ENV=$GITHUB_WORKSPACE/.worker-tools/.github/scripts/worker-curl.sh" >> "$GITHUB_ENV"
       - name: Validate Config Server Callback
         env:
-          CONFIG_SERVER_URL: ${{ secrets.CF_WORKER_URL }}
-          CONFIG_SERVER_EVENT_TOKEN: oidc
+          CONFIG_SERVER_URL: ${{ secrets.CONFIG_SERVER_URL }}
+          CONFIG_SERVER_EVENT_TOKEN: ${{ secrets.CONFIG_SERVER_EVENT_TOKEN }}
           REQUEST_ID: ${{ github.event.inputs.request_id }}
         run: |
           if [ -z "$REQUEST_ID" ]; then
@@ -138,21 +120,21 @@ jobs:
             done
           }
           EOF
-          echo '. "$CF_WORKER_TOOLS/worker-curl.sh"' >> "$RUNNER_TEMP/ci-retry-env.sh"
           echo "BASH_ENV=$RUNNER_TEMP/ci-retry-env.sh" >> "$GITHUB_ENV"
 
       - name: Checkout Build Scripts
         uses: actions/checkout@v4
         with:
-          persist-credentials: false
           path: build-server
 
-      - name: 通过 Worker 读取 NexGen 源码
-        shell: bash
-        env:
-          SOURCE_REPO: ${{ env.NEXGEN_SOURCE_REPO }}
-          SOURCE_REF: ${{ github.event.inputs.branch || 'xiaov2board/Xboard' }}
-        run: node "$CF_WORKER_TOOLS/checkout-via-worker.mjs"
+      - name: Checkout NexGen Source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.NEXGEN_SOURCE_REPO }}
+          ref: ${{ github.event.inputs.branch || 'xiaov2board/Xboard' }}
+          token: ${{ secrets.WORKFLOW_TOKEN }}
+          submodules: recursive
+          path: source
 
       - name: Setup Node For NexGen Name
         uses: actions/setup-node@v4
@@ -168,14 +150,14 @@ jobs:
       - name: Read And Convert Profile
         id: config
         env:
-          GH_TOKEN: oidc
+          GH_TOKEN: ${{ secrets.WORKFLOW_TOKEN }}
           PROFILE_NAME: ${{ github.event.inputs.profile }}
           PROFILE_BRANCH: ${{ github.event.inputs.profile_branch }}
         run: |
           PROFILE_PATH="profiles/$PROFILE_NAME.yaml"
           ENCODED_PROFILE_PATH=$(node -e "console.log(process.argv[1].split('/').map(encodeURIComponent).join('/'))" "$PROFILE_PATH")
           API_RESPONSE=$(curl -s -H "Authorization: token $GH_TOKEN" \
-            "${CF_WORKER_URL%/}/github/repos/${PROFILE_REPO}/contents/${ENCODED_PROFILE_PATH}?ref=${PROFILE_BRANCH}")
+            "https://api.github.com/repos/${PROFILE_REPO}/contents/${ENCODED_PROFILE_PATH}?ref=${PROFILE_BRANCH}")
           if ! echo "$API_RESPONSE" | grep -q '"content"'; then
             echo "::error::读取配置档案失败：$PROFILE_PATH"
             printf "%s" "$API_RESPONSE" | node -e 'const fs=require("fs"); const raw=fs.readFileSync(0,"utf8"); try { const data=JSON.parse(raw); console.log(JSON.stringify({message:data.message||"", status:data.status||"", documentation_url:data.documentation_url||""})); } catch { console.log(String(raw).replace(/https?:\/\/\S+/g,"https://[redacted]").slice(0,1000)); }'
@@ -215,7 +197,7 @@ jobs:
       - name: Prepare Draft Release
         id: release
         env:
-          GH_TOKEN: oidc
+          GH_TOKEN: ${{ secrets.WORKFLOW_TOKEN }}
           APP_NAME: ${{ steps.config.outputs.app_name }}
           VERSION: ${{ github.event.inputs.tag }}
           PROFILE_NAME: ${{ github.event.inputs.profile }}
@@ -228,7 +210,7 @@ jobs:
           fi
           ENCODED_RELEASE_TAG=$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' -- "$RELEASE_TAG")
           EXISTING_RESPONSE=$(curl -sS -H "Authorization: token $GH_TOKEN" \
-            "${CF_WORKER_URL%/}/github/repos/${{ github.repository }}/releases/tags/${ENCODED_RELEASE_TAG}")
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${ENCODED_RELEASE_TAG}")
           EXISTING_ID=$(printf '%s' "$EXISTING_RESPONSE" | node -e "
             const fs = require('fs');
             const data = JSON.parse(fs.readFileSync(0, 'utf8'));
@@ -236,7 +218,7 @@ jobs:
           ")
           if [ -n "$EXISTING_ID" ]; then
             curl -sS -X DELETE -H "Authorization: token $GH_TOKEN" \
-              "${CF_WORKER_URL%/}/github/repos/${{ github.repository }}/releases/${EXISTING_ID}" > /dev/null
+              "https://api.github.com/repos/${{ github.repository }}/releases/${EXISTING_ID}" > /dev/null
           fi
 
           RELEASE_PAYLOAD=$(node -e '
@@ -251,25 +233,31 @@ jobs:
           RELEASE_RESPONSE=$(curl -sS -X POST \
             -H "Authorization: token $GH_TOKEN" \
             -H "Content-Type: application/json" \
-            "${CF_WORKER_URL%/}/github/repos/${{ github.repository }}/releases" \
+            "https://api.github.com/repos/${{ github.repository }}/releases" \
             -d "$RELEASE_PAYLOAD")
           RELEASE_ID=$(printf '%s' "$RELEASE_RESPONSE" | node -e "
             const fs = require('fs');
             const data = JSON.parse(fs.readFileSync(0, 'utf8'));
             process.stdout.write(data && data.id ? String(data.id) : '');
           ")
-          if [ -z "$RELEASE_ID" ]; then
+          UPLOAD_URL=$(printf '%s' "$RELEASE_RESPONSE" | node -e "
+            const fs = require('fs');
+            const data = JSON.parse(fs.readFileSync(0, 'utf8'));
+            process.stdout.write((data && data.upload_url ? String(data.upload_url) : '').replace(/\\{.*$/, ''));
+          ")
+          if [ -z "$RELEASE_ID" ] || [ -z "$UPLOAD_URL" ]; then
             echo "::error::创建 draft release 失败"
             printf "%s" "$RELEASE_RESPONSE" | node -e 'const fs=require("fs"); const raw=fs.readFileSync(0,"utf8"); try { const data=JSON.parse(raw); console.log(JSON.stringify({message:data.message||"", status:data.status||"", documentation_url:data.documentation_url||"", errors:Array.isArray(data.errors)?data.errors.map(e=>({resource:e.resource,field:e.field,code:e.code})):[]})); } catch { console.log(String(raw).replace(/https?:\/\/\S+/g,"https://[redacted]").slice(0,1000)); }'
             exit 1
           fi
           echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
+          echo "upload_url=$UPLOAD_URL" >> "$GITHUB_OUTPUT"
           echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Bind Build Record
         env:
-          CONFIG_SERVER_URL: ${{ secrets.CF_WORKER_URL }}
-          CONFIG_SERVER_EVENT_TOKEN: oidc
+          CONFIG_SERVER_URL: ${{ secrets.CONFIG_SERVER_URL }}
+          CONFIG_SERVER_EVENT_TOKEN: ${{ secrets.CONFIG_SERVER_EVENT_TOKEN }}
           REQUEST_ID: ${{ github.event.inputs.request_id }}
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -289,7 +277,7 @@ jobs:
             };
             process.stdout.write(JSON.stringify(payload));
           ')
-          curl -fsS -X POST "$CALLBACK_URL" \
+          command curl -fsS -X POST "$CALLBACK_URL" \
             -H "Content-Type: application/json" \
             -H "X-Build-Event-Token: $CONFIG_SERVER_EVENT_TOKEN" \
             -d "$PAYLOAD"
@@ -299,20 +287,6 @@ jobs:
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
-      - name: 检出 Worker 调用工具
-        uses: actions/checkout@v4
-        with:
-          path: .worker-tools
-          persist-credentials: false
-      - name: 配置 Worker 身份认证
-        shell: bash
-        run: |
-          if [ -z "$CF_WORKER_URL" ]; then
-            echo "::error::缺少仓库 Secret CF_WORKER_URL"
-            exit 1
-          fi
-          echo "CF_WORKER_TOOLS=$GITHUB_WORKSPACE/.worker-tools/.github/scripts" >> "$GITHUB_ENV"
-          echo "BASH_ENV=$GITHUB_WORKSPACE/.worker-tools/.github/scripts/worker-curl.sh" >> "$GITHUB_ENV"
       - name: Resolve Selected Platforms
         id: matrix
         shell: bash
@@ -367,9 +341,6 @@ jobs:
           NODE
 
   build:
-    permissions:
-      contents: write
-      id-token: write
     needs: [prepare-release, resolve-build-matrix]
     strategy:
       fail-fast: false
@@ -379,20 +350,6 @@ jobs:
       run:
         shell: bash
     steps:
-      - name: 检出 Worker 调用工具
-        uses: actions/checkout@v4
-        with:
-          path: .worker-tools
-          persist-credentials: false
-      - name: 配置 Worker 身份认证
-        shell: bash
-        run: |
-          if [ -z "$CF_WORKER_URL" ]; then
-            echo "::error::缺少仓库 Secret CF_WORKER_URL"
-            exit 1
-          fi
-          echo "CF_WORKER_TOOLS=$GITHUB_WORKSPACE/.worker-tools/.github/scripts" >> "$GITHUB_ENV"
-          echo "BASH_ENV=$GITHUB_WORKSPACE/.worker-tools/.github/scripts/worker-curl.sh" >> "$GITHUB_ENV"
       - name: Configure Network Retries
         shell: bash
         run: |
@@ -416,13 +373,12 @@ jobs:
             done
           }
           EOF
-          echo '. "$CF_WORKER_TOOLS/worker-curl.sh"' >> "$RUNNER_TEMP/ci-retry-env.sh"
           echo "BASH_ENV=$RUNNER_TEMP/ci-retry-env.sh" >> "$GITHUB_ENV"
 
       - name: Report Build Started
         env:
-          CONFIG_SERVER_URL: ${{ secrets.CF_WORKER_URL }}
-          CONFIG_SERVER_EVENT_TOKEN: oidc
+          CONFIG_SERVER_URL: ${{ secrets.CONFIG_SERVER_URL }}
+          CONFIG_SERVER_EVENT_TOKEN: ${{ secrets.CONFIG_SERVER_EVENT_TOKEN }}
           REQUEST_ID: ${{ github.event.inputs.request_id }}
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -451,7 +407,7 @@ jobs:
             };
             process.stdout.write(JSON.stringify(payload));
           ')
-          curl -fsS -X POST "$CALLBACK_URL" \
+          command curl -fsS -X POST "$CALLBACK_URL" \
             -H "Content-Type: application/json" \
             -H "X-Build-Event-Token: $CONFIG_SERVER_EVENT_TOKEN" \
             -d "$PAYLOAD" || true
@@ -459,15 +415,16 @@ jobs:
       - name: Checkout Build Scripts
         uses: actions/checkout@v4
         with:
-          persist-credentials: false
           path: build-server
 
-      - name: 通过 Worker 读取 NexGen 源码
-        shell: bash
-        env:
-          SOURCE_REPO: ${{ env.NEXGEN_SOURCE_REPO }}
-          SOURCE_REF: ${{ github.event.inputs.branch || 'xiaov2board/Xboard' }}
-        run: node "$CF_WORKER_TOOLS/checkout-via-worker.mjs"
+      - name: Checkout NexGen Source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.NEXGEN_SOURCE_REPO }}
+          ref: ${{ github.event.inputs.branch || 'xiaov2board/Xboard' }}
+          token: ${{ secrets.WORKFLOW_TOKEN }}
+          submodules: recursive
+          path: source
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -661,14 +618,14 @@ jobs:
       - name: Apply Profile Config
         shell: bash
         env:
-          GH_TOKEN: oidc
+          GH_TOKEN: ${{ secrets.WORKFLOW_TOKEN }}
           PROFILE_NAME: ${{ github.event.inputs.profile }}
           PROFILE_BRANCH: ${{ github.event.inputs.profile_branch }}
         run: |
           PROFILE_PATH="profiles/$PROFILE_NAME.yaml"
           ENCODED_PROFILE_PATH=$(node -e "console.log(process.argv[1].split('/').map(encodeURIComponent).join('/'))" "$PROFILE_PATH")
           API_RESPONSE=$(curl -s -H "Authorization: token $GH_TOKEN" \
-            "${CF_WORKER_URL%/}/github/repos/${PROFILE_REPO}/contents/${ENCODED_PROFILE_PATH}?ref=${PROFILE_BRANCH}")
+            "https://api.github.com/repos/${PROFILE_REPO}/contents/${ENCODED_PROFILE_PATH}?ref=${PROFILE_BRANCH}")
           if ! echo "$API_RESPONSE" | grep -q '"content"'; then
             echo "::error::读取配置档案失败：$PROFILE_PATH"
             printf "%s" "$API_RESPONSE" | node -e 'const fs=require("fs"); const raw=fs.readFileSync(0,"utf8"); try { const data=JSON.parse(raw); console.log(JSON.stringify({message:data.message||"", status:data.status||"", documentation_url:data.documentation_url||""})); } catch { console.log(String(raw).replace(/https?:\/\/\S+/g,"https://[redacted]").slice(0,1000)); }'
@@ -1263,8 +1220,8 @@ jobs:
       - name: Report Platform Failed
         if: failure()
         env:
-          CONFIG_SERVER_URL: ${{ secrets.CF_WORKER_URL }}
-          CONFIG_SERVER_EVENT_TOKEN: oidc
+          CONFIG_SERVER_URL: ${{ secrets.CONFIG_SERVER_URL }}
+          CONFIG_SERVER_EVENT_TOKEN: ${{ secrets.CONFIG_SERVER_EVENT_TOKEN }}
           REQUEST_ID: ${{ github.event.inputs.request_id }}
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -1294,7 +1251,7 @@ jobs:
             };
             process.stdout.write(JSON.stringify(payload));
           ')
-          curl -fsS -X POST "$CALLBACK_URL" \
+          command curl -fsS -X POST "$CALLBACK_URL" \
             -H "Content-Type: application/json" \
             -H "X-Build-Event-Token: $CONFIG_SERVER_EVENT_TOKEN" \
             -d "$PAYLOAD" || true
@@ -1302,14 +1259,14 @@ jobs:
       - name: Upload Release Assets
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.WORKFLOW_TOKEN }}
           RELEASE_ID: ${{ needs.prepare-release.outputs.release_id }}
-          UPLOAD_URL: https://uploads.github.com/repos/${{ github.repository }}/releases/${{ needs.prepare-release.outputs.release_id }}/assets
+          UPLOAD_URL: ${{ needs.prepare-release.outputs.upload_url }}
           APP_NAME: ${{ needs.prepare-release.outputs.app_name }}
           SAFE_APP_NAME: ${{ needs.prepare-release.outputs.safe_app_name }}
           VERSION: ${{ github.event.inputs.tag }}
-          CONFIG_SERVER_URL: ${{ secrets.CF_WORKER_URL }}
-          CONFIG_SERVER_EVENT_TOKEN: oidc
+          CONFIG_SERVER_URL: ${{ secrets.CONFIG_SERVER_URL }}
+          CONFIG_SERVER_EVENT_TOKEN: ${{ secrets.CONFIG_SERVER_EVENT_TOKEN }}
           REQUEST_ID: ${{ github.event.inputs.request_id }}
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -1344,7 +1301,7 @@ jobs:
               };
               process.stdout.write(JSON.stringify(payload));
             ')
-            curl -fsS -X POST "$CALLBACK_URL" \
+            command curl -fsS -X POST "$CALLBACK_URL" \
               -H "Content-Type: application/json" \
               -H "X-Build-Event-Token: $CONFIG_SERVER_EVENT_TOKEN" \
               -d "$PAYLOAD" || true
@@ -1423,7 +1380,7 @@ jobs:
           fi
 
           ASSETS_RESPONSE=$(curl -sS --fail -H "Authorization: token $GH_TOKEN" \
-            "${CF_WORKER_URL%/}/github/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets")
+            "https://api.github.com/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets")
 
           while IFS= read -r file; do
             [ -n "$file" ] || continue
@@ -1460,7 +1417,7 @@ jobs:
               [ -n "$existing_asset_id" ] || continue
               echo "Deleting existing release asset: $existing_asset_name"
               curl -sS --fail -X DELETE -H "Authorization: token $GH_TOKEN" \
-                "${CF_WORKER_URL%/}/github/repos/${{ github.repository }}/releases/assets/${existing_asset_id}" > /dev/null
+                "https://api.github.com/repos/${{ github.repository }}/releases/assets/${existing_asset_id}" > /dev/null
             done
 
             encoded_name="$(node -e 'console.log(encodeURIComponent(process.argv[1]))' "$asset_name")"
@@ -1508,9 +1465,6 @@ jobs:
 
   # 从 Draft Release 汇总所有平台产物并回传合集包
   merge-artifacts:
-    permissions:
-      contents: write
-      id-token: write
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -1518,20 +1472,6 @@ jobs:
     needs: [prepare-release, build]
     if: ${{ !cancelled() && needs.build.result == 'success' }}
     steps:
-      - name: 检出 Worker 调用工具
-        uses: actions/checkout@v4
-        with:
-          path: .worker-tools
-          persist-credentials: false
-      - name: 配置 Worker 身份认证
-        shell: bash
-        run: |
-          if [ -z "$CF_WORKER_URL" ]; then
-            echo "::error::缺少仓库 Secret CF_WORKER_URL"
-            exit 1
-          fi
-          echo "CF_WORKER_TOOLS=$GITHUB_WORKSPACE/.worker-tools/.github/scripts" >> "$GITHUB_ENV"
-          echo "BASH_ENV=$GITHUB_WORKSPACE/.worker-tools/.github/scripts/worker-curl.sh" >> "$GITHUB_ENV"
       - name: Configure Network Retries
         shell: bash
         run: |
@@ -1555,13 +1495,12 @@ jobs:
             done
           }
           EOF
-          echo '. "$CF_WORKER_TOOLS/worker-curl.sh"' >> "$RUNNER_TEMP/ci-retry-env.sh"
           echo "BASH_ENV=$RUNNER_TEMP/ci-retry-env.sh" >> "$GITHUB_ENV"
 
       - name: Report Bundle Started
         env:
-          CONFIG_SERVER_URL: ${{ secrets.CF_WORKER_URL }}
-          CONFIG_SERVER_EVENT_TOKEN: oidc
+          CONFIG_SERVER_URL: ${{ secrets.CONFIG_SERVER_URL }}
+          CONFIG_SERVER_EVENT_TOKEN: ${{ secrets.CONFIG_SERVER_EVENT_TOKEN }}
           REQUEST_ID: ${{ github.event.inputs.request_id }}
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -1579,20 +1518,20 @@ jobs:
             };
             process.stdout.write(JSON.stringify(payload));
           ')
-          curl -fsS -X POST "$CALLBACK_URL" \
+          command curl -fsS -X POST "$CALLBACK_URL" \
             -H "Content-Type: application/json" \
             -H "X-Build-Event-Token: $CONFIG_SERVER_EVENT_TOKEN" \
             -d "$PAYLOAD" || true
 
       - name: Download release assets
         env:
-          GH_TOKEN: oidc
+          GH_TOKEN: ${{ secrets.WORKFLOW_TOKEN }}
           RELEASE_ID: ${{ needs.prepare-release.outputs.release_id }}
         run: |
           mkdir -p ./dist
 
           ASSETS_RESPONSE=$(curl -sS --fail -H "Authorization: token $GH_TOKEN" \
-            "${CF_WORKER_URL%/}/github/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets")
+            "https://api.github.com/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets")
 
           printf '%s' "$ASSETS_RESPONSE" | node -e "
             const fs = require('fs');
@@ -1608,7 +1547,7 @@ jobs:
             curl -L -sS --fail \
               -H "Authorization: token $GH_TOKEN" \
               -H "Accept: application/octet-stream" \
-              "${CF_WORKER_URL%/}/github/repos/${{ github.repository }}/releases/assets/${asset_id}" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/assets/${asset_id}" \
               -o "./dist/${asset_name}"
           done
 
@@ -1659,14 +1598,14 @@ jobs:
       - name: Upload merged bundle to Draft Release
         if: steps.check.outputs.has_artifacts == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.WORKFLOW_TOKEN }}
           RELEASE_ID: ${{ needs.prepare-release.outputs.release_id }}
-          RELEASE_UPLOAD_URL: https://uploads.github.com/repos/${{ github.repository }}/releases/${{ needs.prepare-release.outputs.release_id }}/assets
+          RELEASE_UPLOAD_URL: ${{ needs.prepare-release.outputs.upload_url }}
         run: |
           PACKAGE_NAME="${{ steps.package.outputs.package_name }}"
           VERSION="${{ github.event.inputs.tag }}"
           ASSETS_RESPONSE=$(curl -sS --fail -H "Authorization: token $GH_TOKEN" \
-            "${CF_WORKER_URL%/}/github/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets")
+            "https://api.github.com/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets")
           printf '%s' "$ASSETS_RESPONSE" | node -e '
             const fs = require("fs");
             const packageName = process.argv[1];
@@ -1703,7 +1642,7 @@ jobs:
             [ -n "$asset_id" ] || continue
             echo "Deleting existing bundle asset: $asset_name"
             curl -sS --fail -X DELETE -H "Authorization: token $GH_TOKEN" \
-              "${CF_WORKER_URL%/}/github/repos/${{ github.repository }}/releases/assets/${asset_id}" > /dev/null
+              "https://api.github.com/repos/${{ github.repository }}/releases/assets/${asset_id}" > /dev/null
           done
 
           cd ./release
@@ -1789,7 +1728,7 @@ jobs:
 
           echo "=== Release assets after merged bundle upload ==="
           curl -sS --fail -H "Authorization: token $GH_TOKEN" \
-            "${CF_WORKER_URL%/}/github/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets" | node -e "
+            "https://api.github.com/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets" | node -e "
               const fs = require('fs');
               const data = JSON.parse(fs.readFileSync(0, 'utf8'));
               const assets = Array.isArray(data) ? data : [];
@@ -1809,20 +1748,6 @@ jobs:
     needs: [prepare-release, build, merge-artifacts]
     if: ${{ always() }}
     steps:
-      - name: 检出 Worker 调用工具
-        uses: actions/checkout@v4
-        with:
-          path: .worker-tools
-          persist-credentials: false
-      - name: 配置 Worker 身份认证
-        shell: bash
-        run: |
-          if [ -z "$CF_WORKER_URL" ]; then
-            echo "::error::缺少仓库 Secret CF_WORKER_URL"
-            exit 1
-          fi
-          echo "CF_WORKER_TOOLS=$GITHUB_WORKSPACE/.worker-tools/.github/scripts" >> "$GITHUB_ENV"
-          echo "BASH_ENV=$GITHUB_WORKSPACE/.worker-tools/.github/scripts/worker-curl.sh" >> "$GITHUB_ENV"
       - name: Configure Network Retries
         shell: bash
         run: |
@@ -1846,13 +1771,12 @@ jobs:
             done
           }
           EOF
-          echo '. "$CF_WORKER_TOOLS/worker-curl.sh"' >> "$RUNNER_TEMP/ci-retry-env.sh"
           echo "BASH_ENV=$RUNNER_TEMP/ci-retry-env.sh" >> "$GITHUB_ENV"
 
       - name: Complete Build Record
         env:
-          CONFIG_SERVER_URL: ${{ secrets.CF_WORKER_URL }}
-          CONFIG_SERVER_EVENT_TOKEN: oidc
+          CONFIG_SERVER_URL: ${{ secrets.CONFIG_SERVER_URL }}
+          CONFIG_SERVER_EVENT_TOKEN: ${{ secrets.CONFIG_SERVER_EVENT_TOKEN }}
           REQUEST_ID: ${{ github.event.inputs.request_id }}
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -1892,7 +1816,7 @@ jobs:
             RESPONSE_FILE="$(mktemp)"
             HTTP_CODE="000"
             CURL_EXIT=0
-            HTTP_CODE=$(curl -sS -o "$RESPONSE_FILE" -w "%{http_code}" -X POST "$CALLBACK_URL" \
+            HTTP_CODE=$(command curl -sS -o "$RESPONSE_FILE" -w "%{http_code}" -X POST "$CALLBACK_URL" \
               -H "Content-Type: application/json" \
               -H "X-Build-Event-Token: $CONFIG_SERVER_EVENT_TOKEN" \
               -d "$PAYLOAD") || CURL_EXIT=$?
