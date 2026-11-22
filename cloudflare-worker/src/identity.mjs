@@ -10,7 +10,7 @@ export function workflowClaims(request) {
   return JSON.parse(decoder.decode(decodeBase64URL(token.split(".")[1])));
 }
 
-export async function isGitHubWorkflow(token, env) {
+export async function isGitHubWorkflow(token, env, report = {}) {
   if (typeof token !== "string" || token.length > 32768) return false;
   try {
     const parts = token.split(".");
@@ -19,24 +19,31 @@ export async function isGitHubWorkflow(token, env) {
     const claims = JSON.parse(decoder.decode(decodeBase64URL(parts[1])));
     const policy = JSON.parse(env.REPOSITORY_POLICY || "{}");
     const now = Date.now() / 1000;
+    report.reason = "声明校验";
     if (header.alg !== "RS256" || typeof header.kid !== "string" || header.crit) return false;
     if (claims.iss !== "https://token.actions.githubusercontent.com" || claims.aud !== new URL(env.WORKER_URL).origin) return false;
     if (claims.repository !== policy.buildRepository || String(claims.repository_id) !== String(policy.repositoryId)) return false;
     if (claims.ref !== "refs/heads/main" || claims.event_name !== "workflow_dispatch") return false;
     if (!policy.workflows.some(file => claims.workflow_ref === policy.buildRepository + "/.github/workflows/" + file + "@refs/heads/main")) return false;
     if (!Number.isFinite(claims.exp) || claims.exp <= now || !Number.isFinite(claims.nbf) || claims.nbf > now + 30) return false;
+    report.reason = "公钥请求";
     if (!signingKeys || Date.now() - refreshedAt > 300000) {
       const response = await fetch("https://token.actions.githubusercontent.com/.well-known/jwks", { redirect: "error" });
-      if (!response.ok) return false;
+      if (!response.ok) { report.reason = "公钥HTTP" + response.status; return false; }
       const data = await response.json();
       signingKeys = data.keys;
       refreshedAt = Date.now();
     }
     const jwk = signingKeys.find(key => key.kid === header.kid && key.kty === "RSA");
-    if (!jwk) return false;
+    if (!jwk) { report.reason = "公钥编号未匹配"; return false; }
+    report.reason = "公钥导入";
     const key = await crypto.subtle.importKey("jwk", jwk, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"]);
-    return crypto.subtle.verify("RSASSA-PKCS1-v1_5", key, decodeBase64URL(parts[2]), encoder.encode(parts[0] + "." + parts[1]));
-  } catch {
+    report.reason = "签名校验";
+    const valid = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", key, decodeBase64URL(parts[2]), encoder.encode(parts[0] + "." + parts[1]));
+    report.reason = valid ? "通过" : "签名无效";
+    return valid;
+  } catch (error) {
+    report.reason = (report.reason || "格式解析") + ":" + error.name;
     return false;
   }
 }

@@ -5,14 +5,14 @@ import { assetRequest } from "./assets.mjs";
 
 const encoder = new TextEncoder();
 
-async function requestRole(request, env) {
+async function requestRole(request, env, report = {}) {
   const authorization = request.headers.get("Authorization") || "";
   let token = authorization.replace(/^(?:Bearer|token)\s+/i, "");
   if (authorization.startsWith("Basic ")) {
     try { token = atob(authorization.slice(6)).split(":").slice(1).join(":"); } catch { return null; }
   }
   if (await equalSecret(env.SERVER_TOKEN, token)) return "server";
-  if (await isGitHubWorkflow(token, env)) return "workflow";
+  if (await isGitHubWorkflow(token, env, report)) return "workflow";
   return null;
 }
 
@@ -45,7 +45,9 @@ export default {
       const path = new URL(request.url).pathname;
       if (path === "/health" && request.method === "GET") return json({ status: "ok", service: "nexgen-build-broker" });
       if (["/api/internal/build-events/bind", "/api/internal/build-events/progress", "/api/internal/build-events/complete", "/api/internal/github/webhook"].includes(path)) return await callback(request, env, path);
-      const role = await requestRole(request, env);
+      const report = {};
+      const role = await requestRole(request, env, report);
+      if (path === "/v1/identity") return json({ status: role ? "通过" : "失败", reason: report.reason || "没有身份令牌" }, role ? 200 : 401);
       if (!role) return json({ error: "调用凭证无效" }, 401);
       if (path.startsWith("/github/")) return await githubRequest(request, env, role);
       if (path.startsWith("/git/")) return await gitReadRequest(request, env, role);
