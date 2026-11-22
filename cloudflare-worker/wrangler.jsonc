@@ -1,0 +1,22 @@
+{
+  "name": "nexgen-build-broker",
+  "main": "src/index.mjs",
+  "compatibility_date": "2026-11-22",
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": {
+    "enabled": false
+  },
+  "vars": {
+    "ORIGIN_MODE": "legacy",
+    "ORIGIN_URL": "https://builds.afeivip.de",
+    "REPOSITORY_POLICY": "{\"buildRepository\":\"q42602736/Xboard-Mihomo-builds\",\"workflows\":[\"build.yaml\",\"build-nexgen-react.yaml\"],\"repositories\":{\"q42602736/xboard-mihomo_sub\":{\"gitRead\":true,\"sourceBranches\":[\"main\",\"sspanel-malio\",\"sspanel-metron\",\"sspanel-uim\"],\"profileBranches\":[\"profiles\"],\"configBranches\":[\"main\"],\"configPaths\":[\"assets/config/xboard.config.yaml\"]},\"q42602736/xboard-mihomo-builds\":{\"gitRead\":false,\"sourceBranches\":[\"main\"],\"profileBranches\":[],\"configBranches\":[\"main\"],\"configPaths\":[\"assets/config/xboard.config.yaml\"]},\"q42602736/nexgen-client-react\":{\"gitRead\":true,\"sourceBranches\":[\"NPanel\",\"sspanel-malio\",\"sspanel-metron\",\"sspanel-uim\",\"xiaov2board/Xboard\"],\"profileBranches\":[\"profiles\"],\"configBranches\":[\"xiaov2board/Xboard\"],\"configPaths\":[\"assets/config/xboard.config.yaml\"]},\"q42602736/nexgen-client-xray\":{\"gitRead\":true,\"sourceBranches\":[\"xray\"],\"profileBranches\":[],\"configBranches\":[\"xray\"],\"configPaths\":[\"assets/config/xboard.config.yaml\"]},\"q42602736/mihomo\":{\"gitRead\":true,\"sourceBranches\":[],\"profileBranches\":[],\"configBranches\":[],\"configPaths\":[]},\"chen08209/flutter_distributor\":{\"gitRead\":true,\"sourceBranches\":[],\"profileBranches\":[],\"configBranches\":[],\"configPaths\":[]},\"hakimi-x/flutter_xboard_sdk\":{\"gitRead\":true,\"sourceBranches\":[],\"profileBranches\":[],\"configBranches\":[],\"configPaths\":[]},\"q42602736/nexgen-client-core-mihomo\":{\"gitRead\":true,\"sourceBranches\":[],\"profileBranches\":[],\"configBranches\":[],\"configPaths\":[]},\"q42602736/xray-core\":{\"gitRead\":true,\"sourceBranches\":[],\"profileBranches\":[],\"configBranches\":[],\"configPaths\":[]}},\"repositoryId\":1121802825}",
+    "WORKER_URL": "https://nexgen-build-broker.caolin5201314.workers.dev"
+  },
+  "r2_buckets": [
+    {
+      "binding": "ARTIFACT_UPLOADS",
+      "bucket_name": "nexgen-build-uploads"
+    }
+  ]
+}
