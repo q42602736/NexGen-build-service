@@ -1,0 +1,172 @@
+name: probe4-head
+run-name: nexgen-${{ github.event.inputs.request_id || github.run_id }}-${{ github.event.inputs.profile
+  }}-${{ github.event.inputs.tag }}
+concurrency:
+  group: nexgen-react-${{ github.event.inputs.profile }}
+  cancel-in-progress: false
+env:
+  PROFILE_REPO: q42602736/NexGen-client-React
+  NEXGEN_SOURCE_REPO: q42602736/NexGen-client-React
+  NODE_VERSION: '22'
+  GO_VERSION: '1.22'
+  CI_RETRY_ATTEMPTS: '5'
+  CI_RETRY_DELAY_SECONDS: '5'
+  CARGO_NET_RETRY: '5'
+  CARGO_HTTP_MULTIPLEXING: 'false'
+  CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
+  NPM_CONFIG_FETCH_RETRIES: '5'
+  NPM_CONFIG_FETCH_RETRY_MINTIMEOUT: '20000'
+  NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: '120000'
+  NPM_CONFIG_AUDIT: 'false'
+  NPM_CONFIG_FUND: 'false'
+jobs:
+  prepare-release:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      release_id: ${{ steps.release.outputs.release_id }}
+      upload_url: ${{ steps.release.outputs.upload_url }}
+      release_tag: ${{ steps.release.outputs.release_tag }}
+      app_name: ${{ steps.config.outputs.app_name }}
+      artifact_app_name: ${{ steps.config.outputs.artifact_app_name }}
+      safe_app_name: ${{ steps.config.outputs.safe_app_name }}
+    steps:
+    - name: Validate Config Server Callback
+      env:
+        CONFIG_SERVER_URL: ${{ secrets.CONFIG_SERVER_URL }}
+        CONFIG_SERVER_EVENT_TOKEN: ${{ secrets.CONFIG_SERVER_EVENT_TOKEN }}
+        REQUEST_ID: ${{ github.event.inputs.request_id }}
+      run: "if [ -z \"$REQUEST_ID\" ]; then\n  echo \"::error::缺少 request_id，配置服务器无法绑定本次打包记录。\"\
+        \n  exit 1\nfi\nif [ -z \"$CONFIG_SERVER_URL\" ]; then\n  echo \"::error::缺少\
+        \ GitHub Actions secret: CONFIG_SERVER_URL\"\n  exit 1\nfi\nif [ -z \"$CONFIG_SERVER_EVENT_TOKEN\"\
+        \ ]; then\n  echo \"::error::缺少 GitHub Actions secret: CONFIG_SERVER_EVENT_TOKEN\"\
+        \n  exit 1\nfi\n"
+    - name: Configure Network Retries
+      shell: bash
+      run: "cat > \"$RUNNER_TEMP/ci-retry-env.sh\" <<'EOF'\nretry() {\n  local max_attempts=\"\
+        ${CI_RETRY_ATTEMPTS:-5}\"\n  local delay_seconds=\"${CI_RETRY_DELAY_SECONDS:-5}\"\
+        \n  local attempt=1\n  local exit_code=0\n  local label=\"${RETRY_LABEL:-${1##*/}}\"\
+        \n  while true; do\n    \"$@\" && return 0\n    exit_code=$?\n    if [ \"\
+        $attempt\" -ge \"$max_attempts\" ]; then\n      echo \"::error::${label} 失败，已重试\
+        \ ${max_attempts} 次。\"\n      return \"$exit_code\"\n    fi\n    echo \"::warning::${label}\
+        \ 失败，准备重试 ${attempt}/${max_attempts}。\"\n    sleep $((delay_seconds * attempt))\n\
+        \    attempt=$((attempt + 1))\n  done\n}\nEOF\necho \"BASH_ENV=$RUNNER_TEMP/ci-retry-env.sh\"\
+        \ >> \"$GITHUB_ENV\"\n"
+    - name: Checkout Build Scripts
+      uses: actions/checkout@v4
+      with:
+        path: build-server
+    - name: Checkout NexGen Source
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ env.NEXGEN_SOURCE_REPO }}
+        ref: ${{ github.event.inputs.branch || 'xiaov2board/Xboard' }}
+        token: ${{ secrets.WORKFLOW_TOKEN }}
+        submodules: recursive
+        path: source
+    - name: Setup Node For NexGen Name
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: npm
+        cache-dependency-path: source/package-lock.json
+    - name: Install NexGen Name Dependencies
+      working-directory: source
+      run: retry npm ci --omit=dev --ignore-scripts
+    - name: Read And Convert Profile
+      id: config
+      env:
+        GH_TOKEN: ${{ secrets.WORKFLOW_TOKEN }}
+        PROFILE_NAME: ${{ github.event.inputs.profile }}
+        PROFILE_BRANCH: ${{ github.event.inputs.profile_branch }}
+      run: "PROFILE_PATH=\"profiles/$PROFILE_NAME.yaml\"\nENCODED_PROFILE_PATH=$(node\
+        \ -e \"console.log(process.argv[1].split('/').map(encodeURIComponent).join('/'))\"\
+        \ \"$PROFILE_PATH\")\nAPI_RESPONSE=$(curl -s -H \"Authorization: token $GH_TOKEN\"\
+        \ \\\n  \"https://api.github.com/repos/${PROFILE_REPO}/contents/${ENCODED_PROFILE_PATH}?ref=${PROFILE_BRANCH}\"\
+        )\nif ! echo \"$API_RESPONSE\" | grep -q '\"content\"'; then\n  echo \"::error::读取配置档案失败：$PROFILE_PATH\"\
+        \n  printf \"%s\" \"$API_RESPONSE\" | node -e 'const fs=require(\"fs\"); const\
+        \ raw=fs.readFileSync(0,\"utf8\"); try { const data=JSON.parse(raw); console.log(JSON.stringify({message:data.message||\"\
+        \", status:data.status||\"\", documentation_url:data.documentation_url||\"\
+        \"})); } catch { console.log(String(raw).replace(/https?:\\/\\/\\S+/g,\"https://[redacted]\"\
+        ).slice(0,1000)); }'\n  exit 1\nfi\nprintf '%s' \"$API_RESPONSE\" | node -e\
+        \ \"\n  const fs = require('fs');\n  const data = JSON.parse(fs.readFileSync(0,\
+        \ 'utf8'));\n  process.stdout.write(Buffer.from(String(data.content || '').replace(/\\\
+        \\n/g, ''), 'base64').toString());\n\" > profile.yaml\n\nnode build-server/.github/scripts/nexgen-profile-to-config.mjs\
+        \ profile.yaml source/nexgen.config.yaml source/nexgen.config.yaml\nAPP_NAME=$(node\
+        \ -e \"\n  const fs = require('fs');\n  const yaml = fs.readFileSync('source/nexgen.config.yaml',\
+        \ 'utf8');\n  const match = yaml.match(/(?:^|\\\\n)    title:\\\\s*([^\\\\\
+        r\\\\n]+)/);\n  const raw = match ? match[1].replace(/^['\\\\\\\"]|['\\\\\\\
+        \"]$/g, '').trim() : '${PROFILE_NAME}';\n  process.stdout.write((raw || '${PROFILE_NAME}').replace(/[\\\
+        \\r\\\\n]+/g, ' ').trim());\n\")\nSAFE_APP_NAME=$(node --input-type=module\
+        \ -e '\n  const { toSafeWindowsName } = await import(\"./source/scripts/name-utils.mjs\"\
+        );\n  process.stdout.write(toSafeWindowsName(process.argv[1], \"NexGen\"));\n\
+        ' -- \"$APP_NAME\")\nARTIFACT_APP_NAME=$(node -e '\n  const raw = String(process.argv[1]\
+        \ || \"\");\n  const safe = raw\n    .replace(/[<>:\"/\\\\|?*\\u0000-\\u001F]/g,\
+        \ \"\")\n    .replace(/\\s+/g, \"\")\n    .trim();\n  process.stdout.write(safe\
+        \ || String(process.argv[2] || \"NexGen\"));\n' \"$APP_NAME\" \"$SAFE_APP_NAME\"\
+        )\necho \"app_name=$APP_NAME\" >> \"$GITHUB_OUTPUT\"\necho \"artifact_app_name=$ARTIFACT_APP_NAME\"\
+        \ >> \"$GITHUB_OUTPUT\"\necho \"safe_app_name=$SAFE_APP_NAME\" >> \"$GITHUB_OUTPUT\"\
+        \necho \"已生成 nexgen.config.yaml，应用名称：$APP_NAME，下载产物名：$ARTIFACT_APP_NAME，安全产物名：$SAFE_APP_NAME\"\
+        \n"
+    - name: Prepare Draft Release
+      id: release
+      env:
+        GH_TOKEN: ${{ secrets.WORKFLOW_TOKEN }}
+        APP_NAME: ${{ steps.config.outputs.app_name }}
+        VERSION: ${{ github.event.inputs.tag }}
+        PROFILE_NAME: ${{ github.event.inputs.profile }}
+      run: "# 仅规范 Git 标签，档案名和应用显示名称保留空格。\nRELEASE_TAG=$(node -e 'process.stdout.write(process.argv[1].replace(/\\\
+        s+/g, \"-\"))' -- \"${PROFILE_NAME}-${VERSION}-${{ github.run_id }}\")\nif\
+        \ ! git check-ref-format \"refs/tags/$RELEASE_TAG\"; then\n  echo \"::error::发布标签无效，请检查档案名和版本号是否包含\
+        \ Git 禁止的字符。\"\n  exit 1\nfi\nENCODED_RELEASE_TAG=$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))'\
+        \ -- \"$RELEASE_TAG\")\nEXISTING_RESPONSE=$(curl -sS -H \"Authorization: token\
+        \ $GH_TOKEN\" \\\n  \"https://api.github.com/repos/${{ github.repository }}/releases/tags/${ENCODED_RELEASE_TAG}\"\
+        )\nEXISTING_ID=$(printf '%s' \"$EXISTING_RESPONSE\" | node -e \"\n  const\
+        \ fs = require('fs');\n  const data = JSON.parse(fs.readFileSync(0, 'utf8'));\n\
+        \  process.stdout.write(data && data.id ? String(data.id) : '');\n\")\nif\
+        \ [ -n \"$EXISTING_ID\" ]; then\n  curl -sS -X DELETE -H \"Authorization:\
+        \ token $GH_TOKEN\" \\\n    \"https://api.github.com/repos/${{ github.repository\
+        \ }}/releases/${EXISTING_ID}\" > /dev/null\nfi\n\nRELEASE_PAYLOAD=$(node -e\
+        \ '\n  const [appName, version, releaseTag, profileName] = process.argv.slice(1);\n\
+        \  process.stdout.write(JSON.stringify({\n    tag_name: releaseTag,\n    name:\
+        \ `${appName} ${version} NexGen React`,\n    draft: true,\n    body: `${appName}\
+        \ ${version} NexGen React 构建产物\\n\\n档案: ${profileName}`\n  }));\n' \"$APP_NAME\"\
+        \ \"$VERSION\" \"$RELEASE_TAG\" \"$PROFILE_NAME\")\nRELEASE_RESPONSE=$(curl\
+        \ -sS -X POST \\\n  -H \"Authorization: token $GH_TOKEN\" \\\n  -H \"Content-Type:\
+        \ application/json\" \\\n  \"https://api.github.com/repos/${{ github.repository\
+        \ }}/releases\" \\\n  -d \"$RELEASE_PAYLOAD\")\nRELEASE_ID=$(printf '%s' \"\
+        $RELEASE_RESPONSE\" | node -e \"\n  const fs = require('fs');\n  const data\
+        \ = JSON.parse(fs.readFileSync(0, 'utf8'));\n  process.stdout.write(data &&\
+        \ data.id ? String(data.id) : '');\n\")\nUPLOAD_URL=$(printf '%s' \"$RELEASE_RESPONSE\"\
+        \ | node -e \"\n  const fs = require('fs');\n  const data = JSON.parse(fs.readFileSync(0,\
+        \ 'utf8'));\n  process.stdout.write((data && data.upload_url ? String(data.upload_url)\
+        \ : '').replace(/\\\\{.*$/, ''));\n\")\nif [ -z \"$RELEASE_ID\" ] || [ -z\
+        \ \"$UPLOAD_URL\" ]; then\n  echo \"::error::创建 draft release 失败\"\n  printf\
+        \ \"%s\" \"$RELEASE_RESPONSE\" | node -e 'const fs=require(\"fs\"); const\
+        \ raw=fs.readFileSync(0,\"utf8\"); try { const data=JSON.parse(raw); console.log(JSON.stringify({message:data.message||\"\
+        \", status:data.status||\"\", documentation_url:data.documentation_url||\"\
+        \", errors:Array.isArray(data.errors)?data.errors.map(e=>({resource:e.resource,field:e.field,code:e.code})):[]}));\
+        \ } catch { console.log(String(raw).replace(/https?:\\/\\/\\S+/g,\"https://[redacted]\"\
+        ).slice(0,1000)); }'\n  exit 1\nfi\necho \"release_id=$RELEASE_ID\" >> \"\
+        $GITHUB_OUTPUT\"\necho \"upload_url=$UPLOAD_URL\" >> \"$GITHUB_OUTPUT\"\n\
+        echo \"release_tag=$RELEASE_TAG\" >> \"$GITHUB_OUTPUT\"\n"
+    - name: Bind Build Record
+      env:
+        CONFIG_SERVER_URL: ${{ secrets.CONFIG_SERVER_URL }}
+        CONFIG_SERVER_EVENT_TOKEN: ${{ secrets.CONFIG_SERVER_EVENT_TOKEN }}
+        REQUEST_ID: ${{ github.event.inputs.request_id }}
+        RUN_ID: ${{ github.run_id }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{
+          github.run_id }}
+        RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
+      run: "CALLBACK_URL=\"${CONFIG_SERVER_URL%/}/api/internal/build-events/bind\"\
+        \nPAYLOAD=$(node -e '\n  const payload = {\n    request_id: process.env.REQUEST_ID,\n\
+        \    run_id: Number(process.env.RUN_ID || 0),\n    run_url: process.env.RUN_URL\
+        \ || \"\",\n    status: \"in_progress\",\n    release_tag: process.env.RELEASE_TAG\
+        \ || \"\",\n    progress_percent: 15,\n    progress_stage: \"release\",\n\
+        \    progress_text: \"GitHub Actions 已接收，正在准备 NexGen 构建环境\"\n  };\n  process.stdout.write(JSON.stringify(payload));\n\
+        ')\ncommand curl -fsS -X POST \"$CALLBACK_URL\" \\\n  -H \"Content-Type: application/json\"\
+        \ \\\n  -H \"X-Build-Event-Token: $CONFIG_SERVER_EVENT_TOKEN\" \\\n  -d \"\
+        $PAYLOAD\"\n"
