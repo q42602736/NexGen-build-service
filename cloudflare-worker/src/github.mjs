@@ -1,4 +1,4 @@
-import { json, readJSON } from "./crypto.mjs";
+import { fetchWithoutRedirect, json, readJSON } from "./crypto.mjs";
 import { workflowClaims } from "./identity.mjs";
 import { requireReleaseOwner } from "./assets.mjs";
 
@@ -96,7 +96,7 @@ export async function githubRequest(request, env, role) {
     if (pieces.length === 1 && !payload.tag_name.endsWith("-" + runID)) return json({ error: "发布标签不属于本次构建" }, 403);
     if (pieces.length === 2) await requireReleaseOwner(env, pieces[1], runID);
     if (pieces[1] === "assets") {
-      const assetResponse = await fetch("https://api.github.com" + path, { headers: { Authorization: "Bearer " + env.GITHUB_TOKEN, Accept: "application/vnd.github+json", "User-Agent": "nexgen-build-broker" }, redirect: "error" });
+      const assetResponse = await fetchWithoutRedirect("https://api.github.com" + path, { headers: { Authorization: "Bearer " + env.GITHUB_TOKEN, Accept: "application/vnd.github+json", "User-Agent": "nexgen-build-broker" } });
       if (!assetResponse.ok) return json({ error: "无法读取产物记录" }, assetResponse.status);
       const asset = await assetResponse.json();
       const assetURL = new URL(asset.browser_download_url);
@@ -120,7 +120,7 @@ export async function githubRequest(request, env, role) {
       return json({ error: "上游返回了不允许的重定向" }, 502);
     }
     await response.body?.cancel();
-    response = await fetch(target, { redirect: "error" });
+    response = await fetchWithoutRedirect(target);
   }
   if (pieces[0] === "releases" && accept !== "application/octet-stream" && response.headers.get("Content-Type")?.includes("json")) {
     const data = await response.json();

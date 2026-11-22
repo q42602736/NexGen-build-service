@@ -53,7 +53,7 @@ permissions:
   id-token: write
 
 env:
-  CF_WORKER_URL: ${{ vars.CF_WORKER_URL }}
+  CF_WORKER_URL: ${{ secrets.CF_WORKER_URL }}
   PROFILE_REPO: q42602736/NexGen-client-React
   NEXGEN_SOURCE_REPO: q42602736/NexGen-client-React
   NODE_VERSION: '22'
@@ -92,14 +92,14 @@ jobs:
         shell: bash
         run: |
           if [ -z "$CF_WORKER_URL" ]; then
-            echo "::error::缺少仓库变量 CF_WORKER_URL"
+            echo "::error::缺少仓库 Secret CF_WORKER_URL"
             exit 1
           fi
           echo "CF_WORKER_TOOLS=$GITHUB_WORKSPACE/.worker-tools/.github/scripts" >> "$GITHUB_ENV"
           echo "BASH_ENV=$GITHUB_WORKSPACE/.worker-tools/.github/scripts/worker-curl.sh" >> "$GITHUB_ENV"
       - name: Validate Config Server Callback
         env:
-          CONFIG_SERVER_URL: ${{ vars.CF_WORKER_URL }}
+          CONFIG_SERVER_URL: ${{ secrets.CF_WORKER_URL }}
           CONFIG_SERVER_EVENT_TOKEN: oidc
           REQUEST_ID: ${{ github.event.inputs.request_id }}
         run: |
@@ -275,7 +275,7 @@ jobs:
 
       - name: Bind Build Record
         env:
-          CONFIG_SERVER_URL: ${{ vars.CF_WORKER_URL }}
+          CONFIG_SERVER_URL: ${{ secrets.CF_WORKER_URL }}
           CONFIG_SERVER_EVENT_TOKEN: oidc
           REQUEST_ID: ${{ github.event.inputs.request_id }}
           RUN_ID: ${{ github.run_id }}
@@ -315,7 +315,7 @@ jobs:
         shell: bash
         run: |
           if [ -z "$CF_WORKER_URL" ]; then
-            echo "::error::缺少仓库变量 CF_WORKER_URL"
+            echo "::error::缺少仓库 Secret CF_WORKER_URL"
             exit 1
           fi
           echo "CF_WORKER_TOOLS=$GITHUB_WORKSPACE/.worker-tools/.github/scripts" >> "$GITHUB_ENV"
@@ -392,7 +392,7 @@ jobs:
         shell: bash
         run: |
           if [ -z "$CF_WORKER_URL" ]; then
-            echo "::error::缺少仓库变量 CF_WORKER_URL"
+            echo "::error::缺少仓库 Secret CF_WORKER_URL"
             exit 1
           fi
           echo "CF_WORKER_TOOLS=$GITHUB_WORKSPACE/.worker-tools/.github/scripts" >> "$GITHUB_ENV"
@@ -425,7 +425,7 @@ jobs:
 
       - name: Report Build Started
         env:
-          CONFIG_SERVER_URL: ${{ vars.CF_WORKER_URL }}
+          CONFIG_SERVER_URL: ${{ secrets.CF_WORKER_URL }}
           CONFIG_SERVER_EVENT_TOKEN: oidc
           REQUEST_ID: ${{ github.event.inputs.request_id }}
           RUN_ID: ${{ github.run_id }}
@@ -1267,7 +1267,7 @@ jobs:
       - name: Report Platform Failed
         if: failure()
         env:
-          CONFIG_SERVER_URL: ${{ vars.CF_WORKER_URL }}
+          CONFIG_SERVER_URL: ${{ secrets.CF_WORKER_URL }}
           CONFIG_SERVER_EVENT_TOKEN: oidc
           REQUEST_ID: ${{ github.event.inputs.request_id }}
           RUN_ID: ${{ github.run_id }}
@@ -1312,7 +1312,7 @@ jobs:
           APP_NAME: ${{ needs.prepare-release.outputs.app_name }}
           SAFE_APP_NAME: ${{ needs.prepare-release.outputs.safe_app_name }}
           VERSION: ${{ github.event.inputs.tag }}
-          CONFIG_SERVER_URL: ${{ vars.CF_WORKER_URL }}
+          CONFIG_SERVER_URL: ${{ secrets.CF_WORKER_URL }}
           CONFIG_SERVER_EVENT_TOKEN: oidc
           REQUEST_ID: ${{ github.event.inputs.request_id }}
           RUN_ID: ${{ github.run_id }}
@@ -1528,7 +1528,7 @@ jobs:
         shell: bash
         run: |
           if [ -z "$CF_WORKER_URL" ]; then
-            echo "::error::缺少仓库变量 CF_WORKER_URL"
+            echo "::error::缺少仓库 Secret CF_WORKER_URL"
             exit 1
           fi
           echo "CF_WORKER_TOOLS=$GITHUB_WORKSPACE/.worker-tools/.github/scripts" >> "$GITHUB_ENV"
@@ -1561,7 +1561,7 @@ jobs:
 
       - name: Report Bundle Started
         env:
-          CONFIG_SERVER_URL: ${{ vars.CF_WORKER_URL }}
+          CONFIG_SERVER_URL: ${{ secrets.CF_WORKER_URL }}
           CONFIG_SERVER_EVENT_TOKEN: oidc
           REQUEST_ID: ${{ github.event.inputs.request_id }}
           RUN_ID: ${{ github.run_id }}
@@ -1819,7 +1819,7 @@ jobs:
         shell: bash
         run: |
           if [ -z "$CF_WORKER_URL" ]; then
-            echo "::error::缺少仓库变量 CF_WORKER_URL"
+            echo "::error::缺少仓库 Secret CF_WORKER_URL"
             exit 1
           fi
           echo "CF_WORKER_TOOLS=$GITHUB_WORKSPACE/.worker-tools/.github/scripts" >> "$GITHUB_ENV"
@@ -1852,7 +1852,7 @@ jobs:
 
       - name: Complete Build Record
         env:
-          CONFIG_SERVER_URL: ${{ vars.CF_WORKER_URL }}
+          CONFIG_SERVER_URL: ${{ secrets.CF_WORKER_URL }}
           CONFIG_SERVER_EVENT_TOKEN: oidc
           REQUEST_ID: ${{ github.event.inputs.request_id }}
           RUN_ID: ${{ github.run_id }}

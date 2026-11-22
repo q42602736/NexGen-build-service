@@ -17,7 +17,10 @@ async function git(args) {
   const env = { ...process.env, GIT_CONFIG_COUNT: String(config.length), GIT_TERMINAL_PROMPT: "0" };
   config.forEach(([key, value], index) => { env["GIT_CONFIG_KEY_" + index] = key; env["GIT_CONFIG_VALUE_" + index] = value; });
   await new Promise((resolve, reject) => {
-    const child = spawn("git", args, { env, stdio: "inherit", shell: false });
+    const child = spawn("git", args, { env, stdio: ["ignore", "pipe", "pipe"], shell: false });
+    const redact = data => String(data).replaceAll(worker.origin, "[Worker]").replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "[身份令牌已隐藏]");
+    child.stdout.on("data", data => process.stdout.write(redact(data)));
+    child.stderr.on("data", data => process.stderr.write(redact(data)));
     child.on("error", () => reject(new Error("无法执行 Git")));
     child.on("exit", code => code === 0 ? resolve() : reject(new Error("源码读取失败")));
   });

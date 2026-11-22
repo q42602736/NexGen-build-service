@@ -7,6 +7,15 @@ export function json(data, status = 200) {
   return Response.json(data, { status, headers: { "Cache-Control": "no-store" } });
 }
 
+export async function fetchWithoutRedirect(url, options = {}) {
+  const response = await fetch(url, { ...options, redirect: "manual" });
+  if (response.status >= 300 && response.status < 400) {
+    await response.body?.cancel();
+    throw new Error("上游返回了不允许的重定向");
+  }
+  return response;
+}
+
 export async function equalSecret(expected, actual) {
   if (!expected || !actual) return false;
   const [left, right] = await Promise.all([

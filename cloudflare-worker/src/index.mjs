@@ -1,18 +1,18 @@
-import { decryptLogBatch, equalSecret, json, readJSON, signature, signToken, verifySignature, verifyToken } from "./crypto.mjs";
+import { decryptLogBatch, equalSecret, fetchWithoutRedirect, json, readJSON, signature, signToken, verifySignature, verifyToken } from "./crypto.mjs";
 import { githubRequest, gitReadRequest } from "./github.mjs";
 import { isGitHubWorkflow } from "./identity.mjs";
 import { assetRequest } from "./assets.mjs";
 
 const encoder = new TextEncoder();
 
-async function requestRole(request, env, report = {}) {
+async function requestRole(request, env) {
   const authorization = request.headers.get("Authorization") || "";
   let token = authorization.replace(/^(?:Bearer|token)\s+/i, "");
   if (authorization.startsWith("Basic ")) {
     try { token = atob(authorization.slice(6)).split(":").slice(1).join(":"); } catch { return null; }
   }
   if (await equalSecret(env.SERVER_TOKEN, token)) return "server";
-  if (await isGitHubWorkflow(token, env, report)) return "workflow";
+  if (await isGitHubWorkflow(token, env)) return "workflow";
   return null;
 }
 
@@ -35,7 +35,7 @@ async function callback(request, env, path) {
   }
   const origin = new URL(env.ORIGIN_URL);
   if (origin.protocol !== "https:") throw new Error("后端地址必须使用 HTTPS");
-  const response = await fetch(new URL(path, origin), { method: "POST", headers, body: bytes, redirect: "error" });
+  const response = await fetchWithoutRedirect(new URL(path, origin), { method: "POST", headers, body: bytes });
   return new Response(response.body, { status: response.status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });
 }
 
@@ -45,9 +45,7 @@ export default {
       const path = new URL(request.url).pathname;
       if (path === "/health" && request.method === "GET") return json({ status: "ok", service: "nexgen-build-broker" });
       if (["/api/internal/build-events/bind", "/api/internal/build-events/progress", "/api/internal/build-events/complete", "/api/internal/github/webhook"].includes(path)) return await callback(request, env, path);
-      const report = {};
-      const role = await requestRole(request, env, report);
-      if (path === "/v1/identity") return json({ status: role ? "通过" : "失败", reason: report.reason || "没有身份令牌" }, role ? 200 : 401);
+      const role = await requestRole(request, env);
       if (!role) return json({ error: "调用凭证无效" }, 401);
       if (path.startsWith("/github/")) return await githubRequest(request, env, role);
       if (path.startsWith("/git/")) return await gitReadRequest(request, env, role);

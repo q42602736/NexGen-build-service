@@ -1,4 +1,4 @@
-import { decodeBase64URL, encodeBase64URL, json, readJSON, signature, verifySignature } from "./crypto.mjs";
+import { decodeBase64URL, encodeBase64URL, fetchWithoutRedirect, json, readJSON, signature, verifySignature } from "./crypto.mjs";
 import { workflowClaims } from "./identity.mjs";
 
 const encoder = new TextEncoder();
@@ -10,8 +10,8 @@ function repository(env) {
 }
 
 export async function releaseMetadata(env, releaseID) {
-  const response = await fetch("https://api.github.com/repos/" + repository(env) + "/releases/" + releaseID, {
-    headers: { Authorization: "Bearer " + env.GITHUB_TOKEN, Accept: "application/vnd.github+json", "User-Agent": "nexgen-build-broker" }, redirect: "error",
+  const response = await fetchWithoutRedirect("https://api.github.com/repos/" + repository(env) + "/releases/" + releaseID, {
+    headers: { Authorization: "Bearer " + env.GITHUB_TOKEN, Accept: "application/vnd.github+json", "User-Agent": "nexgen-build-broker" },
   });
   if (!response.ok) throw new Error("无法读取发布记录");
   return response.json();
@@ -76,8 +76,8 @@ export async function assetRequest(request, env, path) {
     const stream = new FixedLengthStream(object.size);
     const piping = object.body.pipeTo(stream.writable);
     const [response] = await Promise.all([
-      fetch("https://uploads.github.com/repos/" + repository(env) + "/releases/" + ticket.releaseID + "/assets?name=" + encodeURIComponent(ticket.name), {
-        method: "POST", body: stream.readable, redirect: "error",
+      fetchWithoutRedirect("https://uploads.github.com/repos/" + repository(env) + "/releases/" + ticket.releaseID + "/assets?name=" + encodeURIComponent(ticket.name), {
+        method: "POST", body: stream.readable,
         headers: { Authorization: "Bearer " + env.GITHUB_TOKEN, "Content-Type": ticket.contentType, "User-Agent": "nexgen-build-broker" },
       }),
       piping,
