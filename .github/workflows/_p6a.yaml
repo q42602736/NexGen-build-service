@@ -1,0 +1,144 @@
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        family: [android]
+        arch: [amd64]
+        platform: [linux]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Configure Network Retries
+        shell: bash
+        run: "cat > \"$RUNNER_TEMP/ci-retry-env.sh\" <<'EOF'\nretry() {\n  local max_attempts=\"${CI_RETRY_ATTEMPTS:-5}\"\n  local delay_seconds=\"${CI_RETRY_DELAY_SECONDS:-5}\"\n  local attempt=1\n  local exit_code=0\n  local label=\"${RETRY_LABEL:-${1##*/}}\"\n  while true; do\n    \"$@\" && return 0\n    exit_code=$?\n    if [ \"$attempt\" -ge \"$max_attempts\" ]; then\n      echo \"::error::${label} 失败，已重试 ${max_attempts} 次。\"\n      return \"$exit_code\"\n    fi\n    echo \"::warning::${label} 失败，准备重试 ${attempt}/${max_attempts}。\"\n    sleep $((delay_seconds * attempt))\n    attempt=$((attempt + 1))\n  done\n}\nEOF\necho \"BASH_ENV=$RUNNER_TEMP/ci-retry-env.sh\" >> \"$GITHUB_ENV\"\n"
+      - name: Report Build Started
+        env:
+          CONFIG_SERVER_URL: ${{ secrets.CONFIG_SERVER_URL }}
+          CONFIG_SERVER_EVENT_TOKEN: ${{ secrets.CONFIG_SERVER_EVENT_TOKEN }}
+          REQUEST_ID: ${{ github.event.inputs.request_id }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          PLATFORM_LABEL: ${{ matrix.platform }}
+          PLATFORM_KEY: ${{ matrix.platform }}
+        shell: bash
+        run: "CALLBACK_URL=\"${CONFIG_SERVER_URL%/}/api/internal/build-events/progress\"\nPAYLOAD=$(node -e '\n  const label = process.env.PLATFORM_LABEL || \"客户端\";\n  const payload = {\n    request_id: process.env.REQUEST_ID,\n    run_id: Number(process.env.RUN_ID || 0),\n    run_url: process.env.RUN_URL || \"\",\n    status: \"in_progress\",\n    progress_percent: 35,\n    progress_stage: \"build\",\n    progress_text: \"\",\n    progress_detail: {\n      key: process.env.PLATFORM_KEY || label,\n      label,\n      status: \"in_progress\",\n      stage: \"build\",\n      text: \"\"\n    }\n  };\n  process.stdout.write(JSON.stringify(payload));\n')\ncommand curl -fsS -X POST \"$CALLBACK_URL\" \\\n  -H \"Content-Type: application/json\" \\\n  -H \"X-Build-Event-Token: $CONFIG_SERVER_EVENT_TOKEN\" \\\n  -d \"$PAYLOAD\" || true\n"
+      - name: Checkout Build Scripts
+        uses: actions/checkout@v4
+        with:
+          path: build-server
+      - name: Checkout NexGen Source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.NEXGEN_SOURCE_REPO }}
+          ref: ${{ github.event.inputs.branch || 'xiaov2board/Xboard' }}
+          token: ${{ secrets.WORKFLOW_TOKEN }}
+          submodules: recursive
+          path: source
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: source/package-lock.json
+      - name: 识别 Windows 界面宿主
+        if: matrix.family == 'windows'
+        id: windows-runtime
+        shell: pwsh
+        run: '$package = Get-Content source/package.json -Raw | ConvertFrom-Json
+      
+          $electron = (Test-Path source/scripts/electron-windows.mjs) -and [bool]$package.devDependencies.electron
+      
+          $dualRuntime = $electron -and (Select-String -Path source/scripts/package-app.mjs -Pattern ''function packageTauriWindows'' -Quiet)
+      
+          $runtime = if ($dualRuntime) { ''both'' } elseif ($electron) { ''electron'' } else { ''tauri'' }
+      
+          "runtime=$runtime" >> $env:GITHUB_OUTPUT
+      
+          Write-Host "Windows 构建宿主：$runtime"
+      
+          '
+      - name: 配置 Electron 下载缓存目录
+        if: matrix.family == 'windows' && steps.windows-runtime.outputs.runtime != 'tauri'
+        shell: pwsh
+        run: '"ELECTRON_CACHE=$env:RUNNER_TEMP/nexgen-downloads/electron" >> $env:GITHUB_ENV
+      
+          "ELECTRON_BUILDER_CACHE=$env:RUNNER_TEMP/nexgen-downloads/electron-builder" >> $env:GITHUB_ENV
+      
+          '
+      - name: 缓存 Electron 与 Windows 安装工具
+        if: matrix.family == 'windows' && steps.windows-runtime.outputs.runtime != 'tauri'
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/nexgen-downloads
+          key: ${{ runner.os }}-nexgen-electron-downloads-${{ matrix.arch }}-${{ hashFiles('source/package-lock.json') }}
+          restore-keys: '${{ runner.os }}-nexgen-electron-downloads-${{ matrix.arch }}-
+      
+            '
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: 'source/core/mihomo/go.sum
+      
+            source/core/android-bridge/go.sum
+      
+            '
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install Windows Rust Target
+        if: matrix.family == 'windows'
+        shell: bash
+        run: "if [ \"${{ matrix.platform }}\" = \"windows-arm64\" ]; then\n  retry rustup target add aarch64-pc-windows-msvc\nelse\n  retry rustup target add x86_64-pc-windows-msvc\nfi\n"
+      - name: 配置 Windows MSVC 编译环境
+        if: matrix.family == 'windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.arch == 'arm64' && 'amd64_arm64' || 'amd64' }}
+      - name: Setup Java
+        if: matrix.family == 'android'
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Setup Gradle Cache
+        if: matrix.family == 'android'
+        uses: gradle/actions/setup-gradle@v4
+      - name: 配置 Android Gradle 构建诊断
+        if: matrix.family == 'android'
+        run: 'gradle_init_dir="${GRADLE_USER_HOME:-$HOME/.gradle}/init.d"
+      
+          mkdir -p "$gradle_init_dir"
+      
+          cat > "$gradle_init_dir/nexgen-android-ci.gradle" <<''GRADLE''
+      
+          // 在 Tauri 创建的 Gradle 进程内输出原始异常，保留移动端构建上下文。
+      
+          gradle.startParameter.setShowStacktrace(org.gradle.api.logging.configuration.ShowStacktrace.ALWAYS_FULL)
+      
+          gradle.startParameter.setLogLevel(org.gradle.api.logging.LogLevel.INFO)
+      
+          gradle.startParameter.setBuildCacheEnabled(false)
+      
+          gradle.startParameter.setParallelProjectExecutionEnabled(false)
+      
+          gradle.startParameter.setMaxWorkerCount(1)
+      
+          GRADLE
+      
+          '
+      - name: Install Android SDK
+        if: matrix.family == 'android'
+        shell: bash
+        run: "set -euo pipefail\n\nandroid_home=\"${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}\"\nexport ANDROID_HOME=\"$android_home\"\nexport ANDROID_SDK_ROOT=\"$android_home\"\n\nsdkmanager_path=\"\"\nfor candidate in \\\n  \"$android_home/cmdline-tools/latest/bin/sdkmanager\" \\\n  \"$android_home/cmdline-tools/16.0/bin/sdkmanager\" \\\n  \"$android_home/cmdline-tools/bin/sdkmanager\" \\\n  \"$(command -v sdkmanager || true)\"; do\n  if [ -n \"$candidate\" ] && [ -x \"$candidate\" ]; then\n    sdkmanager_path=\"$candidate\"\n    break\n  fi\ndone\n\nif [ -z \"$sdkmanager_path\" ]; then\n  echo \"::error::未找到 sdkmanager，无法安装 Android SDK 组件\"\n  exit 1\nfi\n\necho \"ANDROID_HOME=$android_home\" >> \"$GITHUB_ENV\"\necho \"ANDROID_SDK_ROOT=$android_home\" >> \"$GITHUB_ENV\"\necho \"$android_home/platform-tools\" >> \"$GITHUB_PATH\"\n\nset +o pipefail\nretry bash -c 'yes | \"$1\" --licenses > /dev/null' _ \"$sdkmanager_path\" || true\nretry bash -c 'yes | \"$1\" \"platform-tools\" \"platforms;android-35\" \"build-tools;35.0.0\" \"ndk;27.0.12077973\"' _ \"$sdkmanager_path\"\nset -o pipefail\n\necho \"ANDROID_NDK_HOME=$android_home/ndk/27.0.12077973\" >> \"$GITHUB_ENV\"\necho \"NDK_HOME=$android_home/ndk/27.0.12077973\" >> \"$GITHUB_ENV\"\n"
+      - name: Install Dependencies
+        working-directory: source
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+        run: retry npm ci
