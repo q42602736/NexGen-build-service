@@ -1,0 +1,209 @@
+name: probe-pb
+'on':
+  workflow_dispatch:
+    inputs:
+      client:
+        description: 客户端类型
+        required: false
+        type: string
+        default: nexgen_react
+      profile:
+        description: 配置档案名称
+        required: true
+        type: string
+      profile_branch:
+        description: 配置档案分支
+        required: false
+        type: string
+        default: profiles
+      tag:
+        description: 构建版本号
+        required: true
+        type: string
+      branch:
+        description: NexGen-client-React 源码分支
+        required: false
+        type: string
+        default: xiaov2board/Xboard
+      core:
+        description: 固定为 nexgen
+        required: false
+        type: string
+        default: nexgen
+      platforms:
+        description: 选择平台：all, windows, windows-amd64, windows-arm64, android, android-tv, linux（双架构全部格式）, macos, macos-amd64, macos-arm64
+        required: true
+        type: string
+        default: all
+      request_id:
+        description: 构建请求唯一标识
+        required: false
+        type: string
+run-name: nexgen-${{ github.event.inputs.request_id || github.run_id }}-${{ github.event.inputs.profile }}-${{ github.event.inputs.tag }}
+concurrency:
+  group: nexgen-react-${{ github.event.inputs.profile }}
+  cancel-in-progress: false
+env:
+  PROFILE_REPO: q42602736/NexGen-client-React
+  NEXGEN_SOURCE_REPO: q42602736/NexGen-client-React
+  NODE_VERSION: '22'
+  GO_VERSION: '1.22'
+  CI_RETRY_ATTEMPTS: '5'
+  CI_RETRY_DELAY_SECONDS: '5'
+  CARGO_NET_RETRY: '5'
+  CARGO_HTTP_MULTIPLEXING: 'false'
+  CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
+  NPM_CONFIG_FETCH_RETRIES: '5'
+  NPM_CONFIG_FETCH_RETRY_MINTIMEOUT: '20000'
+  NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: '120000'
+  NPM_CONFIG_AUDIT: 'false'
+  NPM_CONFIG_FUND: 'false'
+jobs:
+  build:
+    needs:
+    - prepare-release
+    - resolve-build-matrix
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+        - ubuntu-latest
+        family:
+        - android
+        arch:
+        - amd64
+        platform:
+        - linux
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+    - name: 固定 Android Tauri CLI 版本
+      if: matrix.family == 'android'
+      working-directory: source
+      env:
+        NEXGEN_ANDROID_TAURI_CLI_VERSION: 2.12.4
+      run: "cli_install_dir=\"$(mktemp -d \"$RUNNER_TEMP/nexgen-tauri-cli.XXXXXX\")\"\nprintf '{\"private\":true}\\n' > \"$cli_install_dir/package.json\"\nretry npm install --prefix \"$cli_install_dir\" --no-save --package-lock=false --ignore-scripts \"@tauri-apps/cli@$NEXGEN_ANDROID_TAURI_CLI_VERSION\"\nNEXGEN_ANDROID_TAURI_CLI_DIR=\"$cli_install_dir\" node - <<'NODE'\nconst fs = require(\"node:fs\");\nconst path = require(\"node:path\");\nconst isolatedCliPath = path.join(process.env.NEXGEN_ANDROID_TAURI_CLI_DIR, \"node_modules\", \"@tauri-apps\", \"cli\");\nconst version = JSON.parse(fs.readFileSync(path.join(isolatedCliPath, \"package.json\"), \"utf8\")).version;\nif (version !== process.env.NEXGEN_ANDROID_TAURI_CLI_VERSION) {\n  throw new Error(`Android Tauri CLI 版本不符合预期：${version}`);\n}\nconst localCliPath = path.resolve(\"node_modules\", \"@tauri-apps\", \"cli\");\nfs.rmSync(localCliPath, { recursive: true, force: true });\nfs.symlinkSync(isolatedCliPath, localCliPath, \"dir\");\nconst lockedPackages = JSON.parse(fs.readFileSync(\"package-lock.json\", \"utf8\")).packages;\nfor (const name of [\"@tauri-apps/api\", \"@tauri-apps/plugin-log\"]) {\n  const lockedVersion = lockedPackages[`node_modules/${name}`]?.version;\n  const installedVersion = JSON.parse(fs.readFileSync(path.join(\"node_modules\", name, \"package.json\"), \"utf8\")).version;\n  if (!lockedVersion || installedVersion !== lockedVersion) {\n    throw new Error(`Android 依赖版本偏离锁文件：${name}，预期 ${lockedVersion}，实际 ${installedVersion}`);\n  }\n  console.log(`Android 依赖版本核对通过：${name}@${installedVersion}`);\n}\nconsole.log(`Android Tauri CLI 版本：${version}`);\nNODE\n"
+    - name: Warm Go Module Cache
+      shell: bash
+      run: "set -euo pipefail\n\nwarm_go_module() {\n  local module_dir=\"$1\"\n  if [ ! -f \"$module_dir/go.mod\" ]; then\n    echo \"跳过 Go module 预热，未找到 $module_dir/go.mod\"\n    return 0\n  fi\n\n  echo \"=== Go module 预热：$module_dir ===\"\n  (\n    cd \"$module_dir\"\n    go env GOVERSION GOMOD GOPROXY GOMODCACHE GOCACHE\n    retry go mod download\n    echo \"Go module 预热完成：$module_dir\"\n  )\n}\n\nwarm_go_module source/core/mihomo\nwarm_go_module source/core/android-bridge\n"
+    - name: Apply Profile Config
+      shell: bash
+      env:
+        GH_TOKEN: ${{ secrets.WORKFLOW_TOKEN }}
+        PROFILE_NAME: ${{ github.event.inputs.profile }}
+        PROFILE_BRANCH: ${{ github.event.inputs.profile_branch }}
+      run: "PROFILE_PATH=\"profiles/$PROFILE_NAME.yaml\"\nENCODED_PROFILE_PATH=$(node -e \"console.log(process.argv[1].split('/').map(encodeURIComponent).join('/'))\" \"$PROFILE_PATH\")\nAPI_RESPONSE=$(curl -s -H \"Authorization: token $GH_TOKEN\" \\\n  \"https://api.github.com/repos/${PROFILE_REPO}/contents/${ENCODED_PROFILE_PATH}?ref=${PROFILE_BRANCH}\")\nif ! echo \"$API_RESPONSE\" | grep -q '\"content\"'; then\n  echo \"::error::读取配置档案失败：$PROFILE_PATH\"\n  printf \"%s\" \"$API_RESPONSE\" | node -e 'const fs=require(\"fs\"); const raw=fs.readFileSync(0,\"utf8\"); try { const data=JSON.parse(raw); console.log(JSON.stringify({message:data.message||\"\", status:data.status||\"\", documentation_url:data.documentation_url||\"\"})); } catch { console.log(String(raw).replace(/https?:\\/\\/\\S+/g,\"https://[redacted]\").slice(0,1000)); }'\n  exit 1\nfi\nprintf '%s' \"$API_RESPONSE\" | node -e \"\n  const fs = require('fs');\n  const data = JSON.parse(fs.readFileSync(0, 'utf8'));\n  process.stdout.write(Buffer.from(String(data.content || '').replace(/\\\\n/g, ''), 'base64').toString());\n\" > profile.yaml\nnode build-server/.github/scripts/nexgen-profile-to-config.mjs profile.yaml source/nexgen.config.yaml source/nexgen.config.yaml\n"
+    - name: Apply App Version
+      shell: bash
+      run: node build-server/.github/scripts/apply-nexgen-version.mjs source "${{ github.event.inputs.tag }}"
+    - name: Cache Android Rust Build
+      if: matrix.family == 'android'
+      uses: actions/cache@v4
+      with:
+        path: '~/.cargo/git
+
+          ~/.cargo/registry
+
+          source/src-tauri/target
+
+          '
+        key: ${{ runner.os }}-nexgen-react-android-rust-${{ hashFiles('source/src-tauri/Cargo.lock') }}
+        restore-keys: '${{ runner.os }}-nexgen-react-android-rust-
+
+          '
+    - name: Cache Android Core Artifacts
+      if: matrix.family == 'android'
+      uses: actions/cache@v4
+      with:
+        path: source/core/android-libs
+        key: ${{ runner.os }}-nexgen-react-android-core-${{ hashFiles('source/core/android-bridge/go.sum', 'source/core/android-bridge/**/*.go', 'source/core/mihomo/go.sum', 'source/core/mihomo/**/*.go', 'source/scripts/build-android-core.mjs') }}
+        restore-keys: '${{ runner.os }}-nexgen-react-android-core-
+
+          '
+    - name: Warm Rust Crate Cache
+      shell: bash
+      run: "if [ -f source/src-tauri/Cargo.lock ]; then\n  (cd source/src-tauri && retry cargo fetch)\nelse\n  echo \"跳过 Rust crate 预热，未找到 source/src-tauri/Cargo.lock\"\nfi\n"
+    - name: Install Image Tools
+      shell: bash
+      run: "case \"${{ runner.os }}\" in\n  Linux)\n    while IFS= read -r -d '' source_file; do\n      sudo sed -i \\\n        -e 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' \\\n        -e 's|https://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' \\\n        \"$source_file\"\n    done < <(sudo find /etc/apt -type f \\( -name '*.list' -o -name '*.sources' \\) -print0)\n    RETRY_LABEL=\"apt-get update\" retry timeout --signal=TERM 120s sudo apt-get update -y\n    RETRY_LABEL=\"apt-get install imagemagick\" retry timeout --signal=TERM 120s sudo apt-get install -y --no-install-recommends imagemagick\n    ;;\n  macOS)\n    retry brew install imagemagick\n    ;;\n  Windows)\n    retry choco install imagemagick -y --no-progress\n    powershell -NoProfile -Command '$dir = Get-ChildItem \"C:\\Program Files\" -Directory -Filter \"ImageMagick*\" | Select-Object -First 1; if ($dir) { Add-Content -Path $env:GITHUB_PATH -Value $dir.FullName }'\n    ;;\n  *)\n    echo \"::error::不支持的 runner 系统：${{ runner.os }}\"\n    exit 1\n    ;;\nesac\n"
+    - name: 安装 Linux 桌面打包依赖
+      if: matrix.family == 'linux'
+      run: "retry sudo apt-get install -y --no-install-recommends \\\n  build-essential pkg-config curl wget file libwebkit2gtk-4.1-dev \\\n  libgtk-3-dev libssl-dev libxdo-dev libayatana-appindicator3-dev librsvg2-dev \\\n  patchelf libfuse2 libcap2-bin policykit-1 xdg-utils gsettings-desktop-schemas \\\n  libsecret-tools gnome-keyring rpm squashfs-tools zsync\n"
+    - name: Apply App Icon
+      shell: bash
+      run: node build-server/.github/scripts/apply-nexgen-icon.mjs source
+    - name: Build Windows Package
+      if: matrix.family == 'windows'
+      working-directory: source
+      shell: pwsh
+      env:
+        GOMAXPROCS: '2'
+        GOFLAGS: -p=1
+        WINDOWS_ARCH: ${{ matrix.arch }}
+        WINDOWS_RUNTIME: ${{ steps.windows-runtime.outputs.runtime }}
+      run: "$arch = if ($env:WINDOWS_ARCH -eq 'arm64') { 'arm64' } else { 'x64' }\n$target = if ($arch -eq 'arm64') { 'aarch64-pc-windows-msvc' } else { 'x86_64-pc-windows-msvc' }\nif ($env:WINDOWS_RUNTIME -eq 'tauri') {\n  npm run desktop:core -- --target $target\n  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }\n}\n# Electron 入口内部会构建并校验当前架构的 Rust 宿主和 Mihomo 核心。\nif ($env:WINDOWS_RUNTIME -eq 'both') {\n  npm run package:windows -- --runtime both --targets $arch --bundles 'nsis,msi'\n} else {\n  npm run package:windows -- --targets $arch --bundles 'nsis,msi'\n}\nif ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }\n$packages = @(\n  Get-ChildItem dist -File -Filter \"*-windows-$arch-setup.exe\"\n  Get-ChildItem dist -File -Filter \"*-windows-$arch-installer.msi\"\n)\n$expectedCount = if ($env:WINDOWS_RUNTIME -eq 'both') { 4 } else { 2 }\nif ($packages.Count -ne $expectedCount -or @($packages | Where-Object Length -eq 0).Count -ne 0) {\n  throw \"Windows 安装包缺失或数量异常，预期 $expectedCount 个 NSIS/MSI：$arch\"\n}\nif ($env:WINDOWS_RUNTIME -eq 'both') {\n  foreach ($extension in @('setup.exe', 'installer.msi')) {\n    $electronPackages = @($packages | Where-Object Name -Like \"*-Electron-windows-$arch-$extension\")\n    $tauriPackages = @($packages | Where-Object { $_.Name -like \"*-windows-$arch-$extension\" -and $_.Name -notlike \"*-Electron-windows-$arch-$extension\" })\n    if ($electronPackages.Count -ne 1 -or $tauriPackages.Count -ne 1) {\n      throw \"Tauri/Electron 安装包未成对生成：$arch $extension\"\n    }\n  }\n}\n$packages | Select-Object Name, Length\n"
+    - name: Build macOS Package
+      if: matrix.family == 'macos'
+      working-directory: source
+      shell: bash
+      env:
+        GOMAXPROCS: '2'
+        GOFLAGS: -p=1
+      run: "# appdmg 的 package.json 里声明了 os: darwin，放进 devDependencies 会让\n# ubuntu runner 的 npm ci 直接 EBADPLATFORM 失败，因此改为在 macOS runner 上全局安装。\nretry npm install -g appdmg@0.6.6\nexport PATH=\"$(npm prefix -g)/bin:$PATH\"\n\nnpm run desktop:core\n# 这里只出 app：dmg 与 pkg 由 scripts/tauri-wrapper.mjs 在 tauri build 后追加生成。\n# dmg 走 appdmg（直接写 .DS_Store，不经过 Finder），CI 无图形会话时也能有正确布局；\n# Tauri 内置的 dmg bundler 依赖 AppleScript 遥控 Finder，CI 上会被跳过导致无布局。\nif [ \"${{ matrix.platform }}\" = \"macos-arm64\" ]; then\n  npm run package:macos -- --targets arm64 --bundles app\nelse\n  npm run package:macos -- --targets amd64 --bundles app\nfi\n\ndmg_count=\"$(find dist -maxdepth 1 -type f -name \"*.dmg\" | wc -l | tr -d ' ')\"\nif [ \"$dmg_count\" = \"0\" ]; then\n  echo \"::error::macOS DMG 产物缺失，请检查 Tauri dmg 打包是否失败或被 --bundles 配置跳过。\"\n  find src-tauri/target -maxdepth 6 -type d -name dmg -print 2>/dev/null || true\n  find dist -maxdepth 1 -type f -print 2>/dev/null || true\n  exit 1\nfi\necho \"=== macOS artifacts ===\"\nls -lh dist/\n"
+    - name: 构建 Linux 全部安装包
+      if: matrix.family == 'linux'
+      working-directory: source
+      env:
+        GOMAXPROCS: '2'
+        GOFLAGS: -p=1
+        LINUX_ARCH: ${{ matrix.arch }}
+        APPIMAGE_EXTRACT_AND_RUN: '1'
+      run: "# 使用各架构原生 runner，一次生成 DEB、RPM 和 AppImage。\nnpm run package:linux -- --targets \"$LINUX_ARCH\" --bundles deb,rpm,appimage\n\nshopt -s nullglob\nfor extension in deb rpm AppImage; do\n  packages=(dist/*-linux-\"$LINUX_ARCH\".\"$extension\")\n  if [ \"${#packages[@]}\" -ne 1 ] || [ ! -s \"${packages[0]}\" ]; then\n    echo \"::error::Linux 安装包缺失或数量异常：$LINUX_ARCH $extension，预期 1 个。\"\n    exit 1\n  fi\n  package_name=\"$(basename \"${packages[0]}\")\"\n  (cd dist && sha256sum -c \"${package_name}.sha256\")\ndone\necho \"Linux $LINUX_ARCH 的三种安装包已生成并通过校验。\"\nls -lh dist/*-linux-\"$LINUX_ARCH\".*\n"
+    - name: Build Android Package
+      if: matrix.family == 'android'
+      working-directory: source
+      shell: bash
+      env:
+        GOMAXPROCS: '2'
+        GOFLAGS: -p=1
+        NEXGEN_TARGET_PLATFORM: android
+        NEXGEN_SKIP_DESKTOP_CORE_RESOURCE: '1'
+        NEXGEN_ANDROID_SIGNING_BUNDLE: ${{ secrets.NEXGEN_ANDROID_SIGNING_BUNDLE }}
+        RUST_BACKTRACE: full
+      run: "set -o pipefail\n\nsync_nexgen_build_inputs() {\n  node scripts/generate-config.mjs\n  node scripts/sync-branding.mjs\n}\n\ndisable_tauri_before_build_command() {\n  node - <<'NODE'\nconst fs = require(\"fs\");\nconst configPath = \"src-tauri/tauri.conf.json\";\nconst config = JSON.parse(fs.readFileSync(configPath, \"utf8\"));\nif (config.build && Object.prototype.hasOwnProperty.call(config.build, \"beforeBuildCommand\")) {\n  delete config.build.beforeBuildCommand;\n  fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\\n`);\n  console.log(\"已禁用 Tauri Android 重复 beforeBuildCommand，复用当前 dist。\");\n}\nNODE\n}\n\nconfigure_android_signing() {\n  if [ -z \"${NEXGEN_ANDROID_SIGNING_BUNDLE:-}\" ]; then\n    echo \"::error::未配置 NEXGEN_ANDROID_SIGNING_BUNDLE，无法生成固定签名 Android APK。\"\n    exit 1\n  fi\n\n  local signing_dir\n  signing_dir=\"$(mktemp -d)\"\n  printf '%s' \"$NEXGEN_ANDROID_SIGNING_BUNDLE\" | base64 --decode > \"$signing_dir/signing.tar.gz\"\n  tar -xzf \"$signing_dir/signing.tar.gz\" -C \"$signing_dir\"\n\n  if [ ! -f \"$signing_dir/keystore.jks\" ] || [ ! -f \"$signing_dir/local.properties\" ]; then\n    echo \"::error::NEXGEN_ANDROID_SIGNING_BUNDLE 内容不完整。\"\n    exit 1\n  fi\n\n  mkdir -p src-tauri/gen/android/app\n  cp \"$signing_dir/keystore.jks\" src-tauri/gen/android/app/keystore.jks\n  cp \"$signing_dir/local.properties\" src-tauri/gen/android/local.properties\n  chmod 600 src-tauri/gen/android/app/keystore.jks src-tauri/gen/android/local.properties\n  rm -rf \"$signing_dir\"\n  echo \"已配置 NexGen Android 固定签名。\"\n}\n\nprint_android_jni_libs() {\n  local jni_root=\"src-tauri/gen/android/app/src/main/jniLibs\"\n  if [ ! -d \"$jni_root\" ]; then\n    echo \"No jniLibs\"\n    return 0\n  fi\n  find \"$jni_root\" -maxdepth 3 \\( -type f -o -type l \\) -print 2>/dev/null | sort | while read -r item; do\n    ls -lh \"$item\" || true\n    if [ -L \"$item\" ]; then\n      echo \"  -> $(readlink \"$item\" || true)\"\n      if [ -e \"$item\" ]; then\n        echo \"  symlink target exists\"\n      else\n        echo \"  symlink target missing\"\n      fi\n    fi\n    case \"$item\" in\n      *.so) file \"$item\" || true ;;\n    esac\n  done\n}\n\nprint_android_apk_entries() {\n  find src-tauri/gen/android src-tauri/target -type f -name \"*.apk\" -print 2>/dev/null | sort | while read -r apk_file; do\n    echo \"\"\n    echo \"--- APK lib entries: $apk_file ---\"\n    unzip -Z1 \"$apk_file\" 2>/dev/null | grep -E '^(lib/|assets/core/)' | sort || true\n  done || true\n}\n\nprint_android_gradle_config() {\n  echo \"=== Android Build Debug: Gradle config snippets ===\"\n  for config_file in \\\n    src-tauri/gen/android/settings.gradle.kts \\\n    src-tauri/gen/android/gradle.properties \\\n    src-tauri/gen/android/app/tauri.properties \\\n    src-tauri/gen/android/app/build.gradle.kts \\\n    src-tauri/gen/android/buildSrc/src/main/java/com/nexgen/client/kotlin/RustPlugin.kt; do\n    if [ -f \"$config_file\" ]; then\n      echo \"\"\n      echo \"--- $config_file ---\"\n      sed -n '1,220p' \"$config_file\" || true\n    fi\n  done\n  if [ -f src-tauri/gen/android/local.properties ]; then\n    echo \"\"\n    echo \"--- src-tauri/gen/android/local.properties ---\"\n    echo \"local.properties exists; content hidden because it can contain signing secrets.\"\n  fi\n  echo \"\"\n}\n\nprint_android_diagnostics() {\n  echo \"\"\n  echo \"=== Android Build Debug: build.log last 1200 lines ===\"\n  tail -1200 build.log 2>/dev/null || echo \"No build.log\"\n  echo \"\"\n\n  echo \"=== Android Build Debug: dist files ===\"\n  find dist -maxdepth 3 -type f -print 2>/dev/null || echo \"No dist files\"\n  echo \"\"\n\n  echo \"=== Android Build Debug: Gradle wrapper ===\"\n  ls -l src-tauri/gen/android/gradlew src-tauri/gen/android/gradlew-real.sh src-tauri/gen/android/gradle/wrapper/gradle-wrapper.jar 2>/dev/null || true\n  sed -n '1,24p' src-tauri/gen/android/gradlew 2>/dev/null || true\n  echo \"\"\n\n  echo \"=== Android Build Debug: jniLibs ===\"\n  print_android_jni_libs\n  echo \"\"\n\n  print_android_gradle_config\n\n  echo \"=== Android Build Debug: generated project files ===\"\n  find src-tauri/gen/android -maxdepth 5 -type f -print 2>/dev/null | tail -120 || echo \"No Android generated project files\"\n  echo \"\"\n\n  echo \"=== Android Build Debug: Android build outputs and intermediates ===\"\n  find src-tauri/gen/android/app/build/outputs src-tauri/gen/android/app/build/intermediates -maxdepth 7 -type f \\\n    \\( -name \"*.apk\" -o -name \"*.idsig\" -o -name \"*.so\" -o -name \"*.json\" -o -name \"*.txt\" \\) \\\n    -print 2>/dev/null | tail -220 || echo \"No Android build outputs\"\n  echo \"\"\n\n  echo \"=== Android Build Debug: Android reports ===\"\n  find src-tauri/gen/android/build/reports src-tauri/gen/android/app/build/reports -maxdepth 5 -type f -print 2>/dev/null || echo \"No Android reports\"\n  echo \"\"\n\n  echo \"=== Android Build Debug: recent Gradle and build logs ===\"\n  find src-tauri/gen/android src-tauri/target -type f \\( -name \"*.log\" -o -name \"*.txt\" -o -name \"*.html\" \\) 2>/dev/null | while read -r log_file; do\n    echo \"\"\n    echo \"--- $log_file ---\"\n    tail -160 \"$log_file\" || true\n  done || true\n  echo \"\"\n\n  echo \"=== Android Build Debug: APK candidates ===\"\n  find src-tauri/gen/android src-tauri/target -type f -name \"*.apk\" -print 2>/dev/null || echo \"No APK files\"\n  print_android_apk_entries\n}\n\nsync_nexgen_build_inputs\nif [ ! -d src-tauri/gen/android/app ]; then\n  retry npm --ignore-scripts run tauri -- android init\nfi\nconfigure_android_signing\nmkdir -p dist\nrm -f dist/*.apk\nANDROID_APK_STAGE_DIR=\"$(pwd)/.android-apk-artifacts\"\nrm -rf \"$ANDROID_APK_STAGE_DIR\"\nmkdir -p \"$ANDROID_APK_STAGE_DIR\"\ntrap 'rm -rf \"$ANDROID_APK_STAGE_DIR\"' EXIT\n\nclean_android_apk_outputs() {\n  rm -rf \\\n    src-tauri/gen/android/.gradle \\\n    src-tauri/gen/android/build \\\n    src-tauri/gen/android/app/.cxx \\\n    src-tauri/gen/android/app/build\n}\n\nrun_android_build_with_retry() {\n  local abi=\"$1\"\n  shift\n  local attempt exit_code attempt_log\n  for attempt in 1 2; do\n    clean_android_apk_outputs\n    attempt_log=\"android-build-${abi}-${attempt}.log\"\n    : > \"$attempt_log\"\n    echo \"Android ${abi} 构建，第 ${attempt}/2 次。\" | tee -a build.log\n    set +e\n    TAURI_CLI_VERBOSITY=1 \"$@\" 2>&1 | tee -a build.log \"$attempt_log\"\n    exit_code=$?\n    set -e\n    if [ \"$exit_code\" -eq 0 ]; then\n      return 0\n    fi\n    if [ \"$attempt\" -eq 2 ] || ! grep -Eq \"Execution failed for task ':app:package[^']*Release'|PackageAndroidArtifact.*IncrementalSplitterRunnable\" \"$attempt_log\"; then\n      echo \"::error::NexGen Android ${abi} APK 打包失败，下面输出原始诊断日志。\"\n      print_android_diagnostics\n      exit \"$exit_code\"\n    fi\n    echo \"::warning::Android ${abi} APK 打包阶段失败，清理生成状态后重跑一次完整 Tauri 构建；原始日志：$attempt_log\" | tee -a build.log\n  done\n}\n\nfind_android_apk_by_pattern() {\n  local pattern=\"$1\"\n  find src-tauri/gen/android -type f -name \"*.apk\" | sort | grep -E \"$pattern\" | tail -1 || true\n}\n\nassert_android_apk_abi() {\n  local apk_file=\"$1\"\n  local abi=\"$2\"\n  local entries\n  entries=\"$(unzip -Z1 \"$apk_file\")\"\n  if printf '%s\\n' \"$entries\" | grep -q '^assets/core/'; then\n    echo \"::error::Android APK 混入桌面核心资源：$apk_file\"\n    print_android_diagnostics\n    exit 1\n  fi\n  case \"$abi\" in\n    arm64-v8a)\n      if ! printf '%s\\n' \"$entries\" | grep -q '^lib/arm64-v8a/'; then\n        echo \"::error::Android arm64-v8a APK 缺少 arm64-v8a 原生库：$apk_file\"\n        print_android_diagnostics\n        exit 1\n      fi\n      if printf '%s\\n' \"$entries\" | grep -q '^lib/armeabi-v7a/'; then\n        echo \"::error::Android arm64-v8a APK 混入 armeabi-v7a 原生库：$apk_file\"\n        print_android_diagnostics\n        exit 1\n      fi\n      ;;\n    armeabi-v7a)\n      if ! printf '%s\\n' \"$entries\" | grep -q '^lib/armeabi-v7a/'; then\n        echo \"::error::Android armeabi-v7a APK 缺少 armeabi-v7a 原生库：$apk_file\"\n        print_android_diagnostics\n        exit 1\n      fi\n      if printf '%s\\n' \"$entries\" | grep -q '^lib/arm64-v8a/'; then\n        echo \"::error::Android armeabi-v7a APK 混入 arm64-v8a 原生库：$apk_file\"\n        print_android_diagnostics\n        exit 1\n      fi\n      ;;\n    universal)\n      if ! printf '%s\\n' \"$entries\" | grep -q '^lib/arm64-v8a/'; then\n        echo \"::error::Android universal APK 缺少 arm64-v8a 原生库：$apk_file\"\n        print_android_diagnostics\n        exit 1\n      fi\n      if ! printf '%s\\n' \"$entries\" | grep -q '^lib/armeabi-v7a/'; then\n        echo \"::error::Android universal APK 缺少 armeabi-v7a 原生库：$apk_file\"\n        print_android_diagnostics\n        exit 1\n      fi\n      ;;\n  esac\n}\n\nassert_android_apk_signed() {\n  local apk_file=\"$1\"\n  local sdk_root=\"${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}\"\n  local apksigner=\"\"\n  if [ -n \"$sdk_root\" ] && [ -d \"$sdk_root/build-tools\" ]; then\n    apksigner=\"$(find \"$sdk_root/build-tools\" -type f -name apksigner | sort -V | tail -1 || true)\"\n  fi\n  if [ -z \"$apksigner\" ]; then\n    echo \"::warning::未找到 apksigner，跳过 APK 签名验证：$apk_file\"\n    return 0\n  fi\n  if ! \"$apksigner\" verify --verbose \"$apk_file\" > apksigner.log 2>&1; then\n    cat apksigner.log\n    echo \"::error::Android APK 未通过签名验证：$apk_file\"\n    print_android_diagnostics\n    exit 1\n  fi\n}\n\nbuild_android_apk() {\n  local target=\"$1\"\n  local output_name=\"$2\"\n  local abi=\"$3\"\n  local find_pattern=\"$4\"\n  local prune_env=\"$5\"\n  if [ \"$prune_env\" = \"1\" ]; then\n    run_android_build_with_retry \"$abi\" env NEXGEN_ANDROID_PRUNE_TO_ABI=1 npm --ignore-scripts run tauri -- android build --apk --target \"$target\" --split-per-abi\n  else\n    run_android_build_with_retry \"$abi\" npm --ignore-scripts run tauri -- android build --apk --target aarch64 armv7\n  fi\n\n  local apk_file\n\
+        \  apk_file=\"$(find_android_apk_by_pattern \"$find_pattern\")\"\n  if [ -z \"$apk_file\" ]; then\n    echo \"::error::未找到 Android ${abi} APK\"\n    find src-tauri/gen/android -type f -name \"*.apk\" -print 2>/dev/null || true\n    print_android_diagnostics\n    exit 1\n  fi\n\n  assert_android_apk_abi \"$apk_file\" \"$abi\"\n  assert_android_apk_signed \"$apk_file\"\n  cp \"$apk_file\" \"$ANDROID_APK_STAGE_DIR/$output_name\"\n}\n\nfind_android_tv_package_apk() {\n  local abi=\"$1\"\n  find dist/android-tv -maxdepth 1 -type f -name \"*-${abi}.apk\" | sort | tail -1 || true\n}\n\nbuild_android_tv_apks() {\n  rm -rf dist/android-tv\n  run_android_build_with_retry \"android-tv\" env \\\n    NEXGEN_ANDROID_MIN_SDK=22 \\\n    NEXGEN_ANDROID_NDK_API=22 \\\n    NEXGEN_ANDROID_SYNC_FRONTEND_ASSETS=1 \\\n    npm --ignore-scripts run package:android-tv\n\n  local arm64_apk armv7_apk\n  arm64_apk=\"$(find_android_tv_package_apk \"arm64-v8a\")\"\n  armv7_apk=\"$(find_android_tv_package_apk \"armeabi-v7a\")\"\n  if [ -z \"$arm64_apk\" ] || [ -z \"$armv7_apk\" ]; then\n    echo \"::error::Android TV APK 产物缺失。\"\n    find dist/android-tv -maxdepth 1 -type f -name \"*.apk\" -print 2>/dev/null || true\n    print_android_diagnostics\n    exit 1\n  fi\n\n  assert_android_apk_abi \"$arm64_apk\" \"arm64-v8a\"\n  assert_android_apk_abi \"$armv7_apk\" \"armeabi-v7a\"\n  assert_android_apk_signed \"$arm64_apk\"\n  assert_android_apk_signed \"$armv7_apk\"\n  cp \"$arm64_apk\" \"$ANDROID_APK_STAGE_DIR/tv-arm64-v8a.apk\"\n  cp \"$armv7_apk\" \"$ANDROID_APK_STAGE_DIR/tv-armeabi-v7a.apk\"\n}\n\n: > build.log\n\nSAFE_APP_NAME=\"${{ needs.prepare-release.outputs.safe_app_name }}\"\nif [ -z \"$SAFE_APP_NAME\" ]; then\n  echo \"::error::未能解析 NexGen Android 安全产物名。\"\n  exit 1\nfi\n\nrm -f dist/*.apk\nif [ \"${{ matrix.platform }}\" = \"android-tv\" ]; then\n  build_android_tv_apks\n  cp \"$ANDROID_APK_STAGE_DIR/tv-arm64-v8a.apk\" \"dist/${SAFE_APP_NAME}-${{ github.event.inputs.tag }}-android-tv-arm64-v8a.apk\"\n  cp \"$ANDROID_APK_STAGE_DIR/tv-armeabi-v7a.apk\" \"dist/${SAFE_APP_NAME}-${{ github.event.inputs.tag }}-android-tv-armeabi-v7a.apk\"\nelse\n  npm run build\n  disable_tauri_before_build_command\n  build_android_apk \"aarch64\" \"arm64-v8a.apk\" \"arm64-v8a\" '/arm64/release/.*\\.apk$|app-arm64-release.*\\.apk$' \"1\"\n  build_android_apk \"armv7\" \"armeabi-v7a.apk\" \"armeabi-v7a\" '/arm/release/.*\\.apk$|app-arm-release.*\\.apk$|armeabi.*\\.apk$' \"1\"\n  build_android_apk \"universal\" \"universal.apk\" \"universal\" '/universal/release/.*\\.apk$|app-universal-release.*\\.apk$' \"0\"\n  cp \"$ANDROID_APK_STAGE_DIR/arm64-v8a.apk\" \"dist/${SAFE_APP_NAME}-${{ github.event.inputs.tag }}-android-arm64-v8a.apk\"\n  cp \"$ANDROID_APK_STAGE_DIR/armeabi-v7a.apk\" \"dist/${SAFE_APP_NAME}-${{ github.event.inputs.tag }}-android-armeabi-v7a.apk\"\n  cp \"$ANDROID_APK_STAGE_DIR/universal.apk\" \"dist/${SAFE_APP_NAME}-${{ github.event.inputs.tag }}-android-universal.apk\"\nfi\nexpected_apk_count=\"3\"\nif [ \"${{ matrix.platform }}\" = \"android-tv\" ]; then\n  expected_apk_count=\"2\"\nfi\napk_count=\"$(find dist -maxdepth 1 -type f -name \"*.apk\" | wc -l | tr -d ' ')\"\nif [ \"$apk_count\" != \"$expected_apk_count\" ]; then\n  echo \"::error::Android APK 产物数量异常，预期 $expected_apk_count 个，实际 $apk_count 个。\"\n  find dist \"$ANDROID_APK_STAGE_DIR\" -maxdepth 1 -type f -name \"*.apk\" -print 2>/dev/null || true\n  print_android_diagnostics\n  exit 1\nfi\n\necho \"=== Android APK artifacts ===\"\nls -lh dist/*.apk\n"
+    - name: Diagnose NexGen Build Failure
+      if: failure()
+      shell: bash
+      run: "echo \"=== Matrix ===\"\necho \"platform=${{ matrix.platform }}\"\necho \"family=${{ matrix.family }}\"\necho \"arch=${{ matrix.arch }}\"\necho \"\"\n\necho \"=== Tool Versions ===\"\nnode --version || true\nnpm --version || true\nrustc --version || true\ncargo --version || true\ngo version || true\necho \"\"\n\necho \"=== Go Env (mihomo) ===\"\nif [ -d source/core/mihomo ]; then\n  (cd source/core/mihomo && go env GOVERSION GOMOD GOPROXY GOMODCACHE GOCACHE GOOS GOARCH CGO_ENABLED) || true\nelse\n  echo \"source/core/mihomo 不存在\"\nfi\necho \"\"\n\necho \"=== Core Output Files ===\"\nfind source/core -maxdepth 5 -type f \\( -name \"*.exe\" -o -name \"core-manifest.json\" -o -name \"*.so\" -o -name \"*.dylib\" \\) -print 2>/dev/null || true\necho \"\"\n\necho \"=== 客户端安装包与后台产物 ===\"\nfind source/dist source/release/windows source/.nexgen/electron source/src-tauri/target -maxdepth 6 -type f 2>/dev/null | tail -100 || true\n"
+    - name: Report Platform Failed
+      if: failure()
+      env:
+        CONFIG_SERVER_URL: ${{ secrets.CONFIG_SERVER_URL }}
+        CONFIG_SERVER_EVENT_TOKEN: ${{ secrets.CONFIG_SERVER_EVENT_TOKEN }}
+        REQUEST_ID: ${{ github.event.inputs.request_id }}
+        RUN_ID: ${{ github.run_id }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        PLATFORM_LABEL: ${{ matrix.platform }}
+        PLATFORM_KEY: ${{ matrix.platform }}
+      shell: bash
+      run: "CALLBACK_URL=\"${CONFIG_SERVER_URL%/}/api/internal/build-events/progress\"\nPAYLOAD=$(node -e '\n  const label = process.env.PLATFORM_LABEL || \"客户端\";\n  const payload = {\n    request_id: process.env.REQUEST_ID,\n    run_id: Number(process.env.RUN_ID || 0),\n    run_url: process.env.RUN_URL || \"\",\n    status: \"in_progress\",\n    progress_percent: 80,\n    progress_stage: \"build\",\n    progress_text: \"\",\n    progress_detail: {\n      key: process.env.PLATFORM_KEY || label,\n      label,\n      status: \"completed\",\n      conclusion: \"failure\",\n      stage: \"completed\",\n      text: \"\"\n    }\n  };\n  process.stdout.write(JSON.stringify(payload));\n')\ncommand curl -fsS -X POST \"$CALLBACK_URL\" \\\n  -H \"Content-Type: application/json\" \\\n  -H \"X-Build-Event-Token: $CONFIG_SERVER_EVENT_TOKEN\" \\\n  -d \"$PAYLOAD\" || true\n"
+    - name: Upload Release Assets
+      shell: bash
+      env:
+        GH_TOKEN: ${{ secrets.WORKFLOW_TOKEN }}
+        RELEASE_ID: ${{ needs.prepare-release.outputs.release_id }}
+        UPLOAD_URL: ${{ needs.prepare-release.outputs.upload_url }}
+        APP_NAME: ${{ needs.prepare-release.outputs.app_name }}
+        SAFE_APP_NAME: ${{ needs.prepare-release.outputs.safe_app_name }}
+        VERSION: ${{ github.event.inputs.tag }}
+        CONFIG_SERVER_URL: ${{ secrets.CONFIG_SERVER_URL }}
+        CONFIG_SERVER_EVENT_TOKEN: ${{ secrets.CONFIG_SERVER_EVENT_TOKEN }}
+        REQUEST_ID: ${{ github.event.inputs.request_id }}
+        RUN_ID: ${{ github.run_id }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        PLATFORM_LABEL: ${{ matrix.platform }}
+        PLATFORM_KEY: ${{ matrix.platform }}
+      run: "report_build_progress() {\n  local detail_status=\"$1\"\n  local detail_stage=\"$2\"\n  local detail_text=\"$3\"\n  local detail_conclusion=\"${4:-}\"\n  local overall_progress=\"${5:-75}\"\n  CALLBACK_URL=\"${CONFIG_SERVER_URL%/}/api/internal/build-events/progress\"\n  PAYLOAD=$(DETAIL_STATUS=\"$detail_status\" DETAIL_STAGE=\"$detail_stage\" DETAIL_TEXT=\"$detail_text\" DETAIL_CONCLUSION=\"$detail_conclusion\" OVERALL_PROGRESS=\"$overall_progress\" node -e '\n    const label = process.env.PLATFORM_LABEL || \"客户端\";\n    const payload = {\n      request_id: process.env.REQUEST_ID,\n      run_id: Number(process.env.RUN_ID || 0),\n      run_url: process.env.RUN_URL || \"\",\n      status: \"in_progress\",\n      progress_percent: Number(process.env.OVERALL_PROGRESS || 75),\n      progress_stage: process.env.DETAIL_STAGE || \"upload\",\n      progress_text: \"\",\n      progress_detail: {\n        key: process.env.PLATFORM_KEY || label,\n        label,\n        status: process.env.DETAIL_STATUS || \"in_progress\",\n        conclusion: process.env.DETAIL_CONCLUSION || \"\",\n        stage: process.env.DETAIL_STAGE || \"\",\n        text: process.env.DETAIL_TEXT || \"\"\n      }\n    };\n    process.stdout.write(JSON.stringify(payload));\n  ')\n  command curl -fsS -X POST \"$CALLBACK_URL\" \\\n    -H \"Content-Type: application/json\" \\\n    -H \"X-Build-Event-Token: $CONFIG_SERVER_EVENT_TOKEN\" \\\n    -d \"$PAYLOAD\" || true\n}\n\ntrap 'report_build_progress \"completed\" \"completed\" \"\" \"failure\" \"80\"' ERR\nreport_build_progress \"in_progress\" \"upload\" \"\" \"\" \"75\"\n\nif [ ! -d \"source/dist\" ]; then\n  echo \"::error::未找到 source/dist 目录\"\n  exit 1\nfi\n\nif [ -z \"$SAFE_APP_NAME\" ]; then\n  echo \"::error::未能解析 NexGen 安全产物名：$APP_NAME\"\n  exit 1\nfi\nnormalize_nexgen_artifact_names() {\n  local file base normalized suffix prefix\n  for file in source/dist/*.pkg source/dist/*.dmg source/dist/*.apk source/dist/*.exe source/dist/*.msi source/dist/*.deb source/dist/*.rpm source/dist/*.AppImage; do\n    [ -f \"$file\" ] || continue\n    base=\"$(basename \"$file\")\"\n    case \"$base\" in\n      *macos-amd64*.pkg) prefix=\"$SAFE_APP_NAME\"; suffix=\"macos-amd64.pkg\" ;;\n      *macos-arm64*.pkg) prefix=\"$SAFE_APP_NAME\"; suffix=\"macos-arm64.pkg\" ;;\n      *macos-amd64*.dmg) prefix=\"$SAFE_APP_NAME\"; suffix=\"macos-amd64.dmg\" ;;\n      *macos-arm64*.dmg) prefix=\"$SAFE_APP_NAME\"; suffix=\"macos-arm64.dmg\" ;;\n      *android-tv-arm64-v8a*.apk|*tv-arm64-v8a*.apk) prefix=\"$SAFE_APP_NAME\"; suffix=\"android-tv-arm64-v8a.apk\" ;;\n      *android-tv-armeabi-v7a*.apk|*tv-armeabi-v7a*.apk) prefix=\"$SAFE_APP_NAME\"; suffix=\"android-tv-armeabi-v7a.apk\" ;;\n      *android-arm64-v8a*.apk|*arm64-v8a*.apk) prefix=\"$SAFE_APP_NAME\"; suffix=\"android-arm64-v8a.apk\" ;;\n      *android-armeabi-v7a*.apk|*armeabi-v7a*.apk) prefix=\"$SAFE_APP_NAME\"; suffix=\"android-armeabi-v7a.apk\" ;;\n      *android-universal*.apk|*universal*.apk) prefix=\"$SAFE_APP_NAME\"; suffix=\"android-universal.apk\" ;;\n      *-Electron-windows-x64-setup.exe) prefix=\"$SAFE_APP_NAME\"; suffix=\"Electron-windows-x64-setup.exe\" ;;\n      *-Electron-windows-x64-installer.msi) prefix=\"$SAFE_APP_NAME\"; suffix=\"Electron-windows-x64-installer.msi\" ;;\n      *-Electron-windows-arm64-setup.exe) prefix=\"$SAFE_APP_NAME\"; suffix=\"Electron-windows-arm64-setup.exe\" ;;\n      *-Electron-windows-arm64-installer.msi) prefix=\"$SAFE_APP_NAME\"; suffix=\"Electron-windows-arm64-installer.msi\" ;;\n      *windows-x64-setup.exe) prefix=\"$SAFE_APP_NAME\"; suffix=\"windows-x64-setup.exe\" ;;\n      *windows-arm64-setup.exe) prefix=\"$SAFE_APP_NAME\"; suffix=\"windows-arm64-setup.exe\" ;;\n      *windows-x64-installer.msi) prefix=\"$SAFE_APP_NAME\"; suffix=\"windows-x64-installer.msi\" ;;\n      *windows-arm64-installer.msi) prefix=\"$SAFE_APP_NAME\"; suffix=\"windows-arm64-installer.msi\" ;;\n      *-linux-amd64.deb|*-linux-amd64.rpm|*-linux-amd64.AppImage) prefix=\"$SAFE_APP_NAME\"; suffix=\"linux-amd64.${base##*.}\" ;;\n      *-linux-arm64.deb|*-linux-arm64.rpm|*-linux-arm64.AppImage) prefix=\"$SAFE_APP_NAME\"; suffix=\"linux-arm64.${base##*.}\" ;;\n      *) continue ;;\n    esac\n    normalized=\"source/dist/${prefix}-${VERSION}-${suffix}\"\n    if [ \"$file\" != \"$normalized\" ]; then\n      echo \"Renaming release artifact: $base -> $(basename \"$normalized\")\"\n      node -e 'require(\"fs\").renameSync(process.argv[1], process.argv[2])' \"$file\" \"$normalized\"\n    fi\n  done\n}\nnormalize_nexgen_artifact_names\n\nartifact_list=\"$(mktemp)\"\nupload_stage_dir=\"$(mktemp -d)\"\nupload_index=0\ncleanup_upload_stage() {\n  rm -rf \"$upload_stage_dir\"\n  rm -f \"$artifact_list\"\n}\ntrap cleanup_upload_stage EXIT\nfind source/dist -maxdepth 1 -type f \\( \\\n  -name \"*.pkg\" -o \\\n  -name \"*.dmg\" -o \\\n  -name \"*.exe\" -o \\\n  -name \"*.msi\" -o \\\n  -name \"*.apk\" -o \\\n  -name \"*.deb\" -o \\\n  -name \"*.rpm\" -o \\\n  -name \"*.AppImage\" \\\n\\) | sort > \"$artifact_list\"\nif [ \"$(wc -l < \"$artifact_list\" | tr -d ' ')\" = \"0\" ]; then\n  echo \"::error::未找到打包产物\"\n  find source/dist -maxdepth 2 -print 2>/dev/null || true\n  exit 1\nfi\n\nASSETS_RESPONSE=$(curl -sS --fail -H \"Authorization: token $GH_TOKEN\" \\\n  \"https://api.github.com/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets\")\n\nwhile IFS= read -r file; do\n  [ -n \"$file\" ] || continue\n  base=\"$(basename \"$file\")\"\n  safe_base=\"$(echo \"$base\" | tr ' ' '-')\"\n  asset_name=\"$safe_base\"\n  content_type=\"application/octet-stream\"\n  case \"$asset_name\" in\n    *.pkg) content_type=\"application/octet-stream\" ;;\n    *.dmg) content_type=\"application/x-apple-diskimage\" ;;\n    *.exe) content_type=\"application/vnd.microsoft.portable-executable\" ;;\n    *.msi) content_type=\"application/x-msi\" ;;\n    *.apk) content_type=\"application/vnd.android.package-archive\" ;;\n  esac\n\n  printf '%s' \"$ASSETS_RESPONSE\" | node -e \"\n    const fs = require('fs');\n    const assetName = process.argv[1];\n    const version = process.argv[2];\n    const data = JSON.parse(fs.readFileSync(0, 'utf8'));\n    const candidates = new Set([assetName]);\n    const marker = version ? '-' + version + '-' : '';\n    const markerIndex = marker ? assetName.indexOf(marker) : -1;\n    if (markerIndex >= 0) {\n      candidates.add(assetName.slice(markerIndex));\n    }\n    for (const item of Array.isArray(data) ? data : []) {\n      const name = String((item && item.name) || '');\n      if (item && item.id && candidates.has(name)) {\n        process.stdout.write(String(item.id) + '\\t' + name + '\\n');\n      }\n    }\n  \" \"$asset_name\" \"$VERSION\" | while IFS=$'\\t' read -r existing_asset_id existing_asset_name; do\n    [ -n \"$existing_asset_id\" ] || continue\n    echo \"Deleting existing release asset: $existing_asset_name\"\n    curl -sS --fail -X DELETE -H \"Authorization: token $GH_TOKEN\" \\\n      \"https://api.github.com/repos/${{ github.repository }}/releases/assets/${existing_asset_id}\" > /dev/null\n  done\n\n  encoded_name=\"$(node -e 'console.log(encodeURIComponent(process.argv[1]))' \"$asset_name\")\"\n  upload_source=\"$file\"\n  if printf '%s' \"$file\" | LC_ALL=C grep -q '[^ -~]'; then\n    upload_index=$((upload_index + 1))\n    extension=\"${base##*.}\"\n    staged_source=\"$upload_stage_dir/asset-$(printf '%03d' \"$upload_index\").$extension\"\n    node -e 'require(\"fs\").copyFileSync(process.argv[1], process.argv[2])' \"$file\" \"$staged_source\"\n    upload_source=\"$staged_source\"\n    echo \"Using ASCII upload source for non-ASCII path: $asset_name\"\n  fi\n  echo \"Uploading release asset: $asset_name\"\n  upload_response=$(curl -sS --fail --http1.1 --retry 5 --retry-delay 2 --retry-all-errors -X POST \\\n    -H \"Authorization: token $GH_TOKEN\" \\\n    -H \"Content-Type: $content_type\" \\\n    -H \"Expect:\" \\\n    --upload-file \"$upload_source\" \\\n    \"${UPLOAD_URL}?name=${encoded_name}\")\n\n  uploaded_asset_id=$(printf '%s' \"$upload_response\" | node -e \"\n    const fs = require('fs');\n    const data = JSON.parse(fs.readFileSync(0, 'utf8'));\n    process.stdout.write(data && data.id ? String(data.id) : '');\n  \")\n  uploaded_asset_name=$(printf '%s' \"$upload_response\" | node -e \"\n    const fs = require('fs');\n    const data = JSON.parse(fs.readFileSync(0, 'utf8'));\n    process.stdout.write(data && data.name ? String(data.name) : '');\n  \")\n  uploaded_asset_state=$(printf '%s' \"$upload_response\" | node -e \"\n    const fs = require('fs');\n    const data = JSON.parse(fs.readFileSync(0, 'utf8'));\n    process.stdout.write(data && data.state ? String(data.state) : '');\n  \")\n  if [ -z \"$uploaded_asset_id\" ] || [ \"$uploaded_asset_name\" != \"$asset_name\" ] || [ \"$uploaded_asset_state\" != \"uploaded\" ]; then\n    echo \"::error::Release asset upload verification failed: $asset_name\"\n    echo \"$upload_response\"\n    exit 1\n  fi\ndone < \"$artifact_list\"\ncleanup_upload_stage\ntrap - EXIT\nreport_build_progress \"completed\" \"completed\" \"\" \"success\" \"80\"\n"
