@@ -10,5 +10,8 @@ export async function workflowToken() {
   if (!response.ok) throw new Error("获取 GitHub 身份令牌失败");
   const data = await response.json();
   if (typeof data.value !== "string" || !data.value) throw new Error("GitHub 身份响应无效");
+  const header = JSON.parse(Buffer.from(data.value.split(".")[0], "base64url").toString());
+  const claims = JSON.parse(Buffer.from(data.value.split(".")[1], "base64url").toString());
+  console.error("[DEBUG-cf-oidc] " + JSON.stringify({ alg: header.alg, kid: header.kid, iss: claims.iss, aud: claims.aud, repository: claims.repository, repository_id: claims.repository_id, workflow_ref: claims.workflow_ref, ref: claims.ref, event_name: claims.event_name, nbf: claims.nbf, exp: claims.exp }));
   return data.value;
 }
