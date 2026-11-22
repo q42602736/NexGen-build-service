@@ -27,9 +27,14 @@ func main() {
 		// 解析错误可能包含原始配置行，禁止直接输出。
 		fail("本地 .env 解析失败，请检查配置格式")
 	}
-	for _, key := range []string{"GITHUB_TOKEN", "GITHUB_OWNER", "GITHUB_REPO", "JWT_SECRET", "ADMIN_PASSWORD", "BUILD_EVENT_TOKEN", "GITHUB_WEBHOOK_SECRET", "SECURE_LOG_PRIVATE_KEY", "DATABASE_ENCRYPTION_KEY"} {
+	for _, key := range []string{"SOURCE_TOKEN", "BUILD_TOKEN", "GITHUB_OWNER", "GITHUB_REPO", "JWT_SECRET", "ADMIN_PASSWORD", "BUILD_EVENT_TOKEN", "GITHUB_WEBHOOK_SECRET", "SECURE_LOG_PRIVATE_KEY", "DATABASE_ENCRYPTION_KEY"} {
 		if values[key] == "" {
 			fail("本地 .env 缺少必需字段：" + key)
+		}
+	}
+	for _, legacy := range []string{"GITHUB_TOKEN", "WORKFLOW_TOKEN", "SOURCE_READ_TOKEN", "PROFILE_WRITE_TOKEN"} {
+		if values[legacy] != "" {
+			fail("请移除旧凭证字段 " + legacy + "，使用 SOURCE_TOKEN 和 BUILD_TOKEN")
 		}
 	}
 	key, err := hex.DecodeString(values["DATABASE_ENCRYPTION_KEY"])

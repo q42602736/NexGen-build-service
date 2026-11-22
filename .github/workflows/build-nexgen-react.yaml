@@ -48,6 +48,9 @@ concurrency:
   group: nexgen-react-${{ github.event.inputs.profile }}
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 env:
   PROFILE_REPO: q42602736/NexGen-client-React
   NEXGEN_SOURCE_REPO: q42602736/NexGen-client-React
@@ -66,6 +69,8 @@ env:
 
 jobs:
   prepare-release:
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -80,10 +85,15 @@ jobs:
     steps:
       - name: Validate Config Server Callback
         env:
+          SOURCE_TOKEN: ${{ secrets.SOURCE_TOKEN }}
           CONFIG_SERVER_URL: ${{ secrets.CONFIG_SERVER_URL }}
           CONFIG_SERVER_EVENT_TOKEN: ${{ secrets.CONFIG_SERVER_EVENT_TOKEN }}
           REQUEST_ID: ${{ github.event.inputs.request_id }}
         run: |
+          if [ -z "$SOURCE_TOKEN" ]; then
+            echo "::error::缺少源码凭证 SOURCE_TOKEN"
+            exit 1
+          fi
           if [ -z "$REQUEST_ID" ]; then
             echo "::error::缺少 request_id，配置服务器无法绑定本次打包记录。"
             exit 1
@@ -125,14 +135,16 @@ jobs:
       - name: Checkout Build Scripts
         uses: actions/checkout@v4
         with:
+          persist-credentials: false
           path: build-server
 
       - name: Checkout NexGen Source
         uses: actions/checkout@v4
         with:
+          persist-credentials: false
           repository: ${{ env.NEXGEN_SOURCE_REPO }}
           ref: ${{ github.event.inputs.branch || 'xiaov2board/Xboard' }}
-          token: ${{ secrets.WORKFLOW_TOKEN }}
+          token: ${{ secrets.SOURCE_TOKEN }}
           submodules: recursive
           path: source
 
@@ -150,7 +162,7 @@ jobs:
       - name: Read And Convert Profile
         id: config
         env:
-          GH_TOKEN: ${{ secrets.WORKFLOW_TOKEN }}
+          GH_TOKEN: ${{ secrets.SOURCE_TOKEN }}
           PROFILE_NAME: ${{ github.event.inputs.profile }}
           PROFILE_BRANCH: ${{ github.event.inputs.profile_branch }}
         run: |
@@ -197,7 +209,7 @@ jobs:
       - name: Prepare Draft Release
         id: release
         env:
-          GH_TOKEN: ${{ secrets.WORKFLOW_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           APP_NAME: ${{ steps.config.outputs.app_name }}
           VERSION: ${{ github.event.inputs.tag }}
           PROFILE_NAME: ${{ github.event.inputs.profile }}
@@ -341,6 +353,8 @@ jobs:
           NODE
 
   build:
+    permissions:
+      contents: write
     needs: [prepare-release, resolve-build-matrix]
     strategy:
       fail-fast: false
@@ -415,14 +429,16 @@ jobs:
       - name: Checkout Build Scripts
         uses: actions/checkout@v4
         with:
+          persist-credentials: false
           path: build-server
 
       - name: Checkout NexGen Source
         uses: actions/checkout@v4
         with:
+          persist-credentials: false
           repository: ${{ env.NEXGEN_SOURCE_REPO }}
           ref: ${{ github.event.inputs.branch || 'xiaov2board/Xboard' }}
-          token: ${{ secrets.WORKFLOW_TOKEN }}
+          token: ${{ secrets.SOURCE_TOKEN }}
           submodules: recursive
           path: source
 
@@ -618,7 +634,7 @@ jobs:
       - name: Apply Profile Config
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.WORKFLOW_TOKEN }}
+          GH_TOKEN: ${{ secrets.SOURCE_TOKEN }}
           PROFILE_NAME: ${{ github.event.inputs.profile }}
           PROFILE_BRANCH: ${{ github.event.inputs.profile_branch }}
         run: |
@@ -1259,7 +1275,7 @@ jobs:
       - name: Upload Release Assets
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.WORKFLOW_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ needs.prepare-release.outputs.release_id }}
           UPLOAD_URL: ${{ needs.prepare-release.outputs.upload_url }}
           APP_NAME: ${{ needs.prepare-release.outputs.app_name }}
@@ -1465,6 +1481,8 @@ jobs:
 
   # 从 Draft Release 汇总所有平台产物并回传合集包
   merge-artifacts:
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -1525,7 +1543,7 @@ jobs:
 
       - name: Download release assets
         env:
-          GH_TOKEN: ${{ secrets.WORKFLOW_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ needs.prepare-release.outputs.release_id }}
         run: |
           mkdir -p ./dist
@@ -1598,7 +1616,7 @@ jobs:
       - name: Upload merged bundle to Draft Release
         if: steps.check.outputs.has_artifacts == 'true'
         env:
-          GH_TOKEN: ${{ secrets.WORKFLOW_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ needs.prepare-release.outputs.release_id }}
           RELEASE_UPLOAD_URL: ${{ needs.prepare-release.outputs.upload_url }}
         run: |

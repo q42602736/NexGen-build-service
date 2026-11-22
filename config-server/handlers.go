@@ -125,13 +125,15 @@ func writeBuildStatusResponse(w http.ResponseWriter, cacheKey string, result map
 
 type Handlers struct {
 	gh              *GitHubClient
+	buildGH         *GitHubClient
 	profileGH       *GitHubClient
 	nexGenProfileGH *GitHubClient
 }
 
-func NewHandlers(gh *GitHubClient, profileGH *GitHubClient, nexGenProfileGH *GitHubClient) *Handlers {
+func NewHandlers(gh *GitHubClient, profileGH *GitHubClient, nexGenProfileGH *GitHubClient, buildGH *GitHubClient) *Handlers {
 	return &Handlers{
 		gh:              gh,
+		buildGH:         buildGH,
 		profileGH:       profileGH,
 		nexGenProfileGH: nexGenProfileGH,
 	}
@@ -1980,14 +1982,14 @@ func (h *Handlers) getActiveBuildJobUsageForClient(client string) (BuildQueueSna
 	if err != nil {
 		return snapshot, err
 	}
-	runs, err := h.gh.GetActiveWorkflowRuns(cfg.BuildOwner, cfg.BuildRepo, clientConfig.WorkflowFile)
+	runs, err := h.buildGH.GetActiveWorkflowRuns(cfg.BuildOwner, cfg.BuildRepo, clientConfig.WorkflowFile)
 	if err != nil {
 		return snapshot, err
 	}
 
 	snapshot.ActiveRuns = len(runs)
 	for _, run := range runs {
-		jobs, jobsErr := h.gh.GetWorkflowRunJobs(cfg.BuildOwner, cfg.BuildRepo, run.ID)
+		jobs, jobsErr := h.buildGH.GetWorkflowRunJobs(cfg.BuildOwner, cfg.BuildRepo, run.ID)
 		if jobsErr == nil && len(jobs) > 0 {
 			for _, job := range jobs {
 				if !isActiveWorkflowStatus(job.Status) {
@@ -2001,7 +2003,7 @@ func (h *Handlers) getActiveBuildJobUsageForClient(client string) (BuildQueueSna
 			continue
 		}
 
-		inputs, inputsErr := h.gh.GetWorkflowRunInputs(cfg.BuildOwner, cfg.BuildRepo, run.ID)
+		inputs, inputsErr := h.buildGH.GetWorkflowRunInputs(cfg.BuildOwner, cfg.BuildRepo, run.ID)
 		demand := BuildJobDemand{Total: 1}
 		if inputsErr == nil {
 			inputClient := normalizeBuildClient(inputs["client"])
@@ -2918,7 +2920,7 @@ func (h *Handlers) findWorkflowRunByRequestIDForClient(client, requestID string,
 		if index > 0 && searchCounts[index-1] >= count {
 			continue
 		}
-		runs, err := h.gh.GetRecentWorkflowRuns(cfg.BuildOwner, cfg.BuildRepo, workflowFile, count)
+		runs, err := h.buildGH.GetRecentWorkflowRuns(cfg.BuildOwner, cfg.BuildRepo, workflowFile, count)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -2937,7 +2939,7 @@ func (h *Handlers) findWorkflowRunByRequestIDForClient(client, requestID string,
 			}
 			// 新工作流 run-name 已包含 request_id；没有标记的旧完成记录不再逐个翻详情，避免快速耗尽 GitHub API 额度。
 			if index == 0 && isActiveWorkflowStatus(run.Status) {
-				inputs, err := h.gh.GetWorkflowRunInputs(cfg.BuildOwner, cfg.BuildRepo, run.ID)
+				inputs, err := h.buildGH.GetWorkflowRunInputs(cfg.BuildOwner, cfg.BuildRepo, run.ID)
 				if err != nil {
 					continue
 				}
@@ -2957,7 +2959,7 @@ func (h *Handlers) findActiveWorkflowRunForRecord(record *BuildRecord) (*Workflo
 	}
 
 	if record.RunID > 0 {
-		run, inputs, err := h.gh.GetWorkflowRun(cfg.BuildOwner, cfg.BuildRepo, record.RunID)
+		run, inputs, err := h.buildGH.GetWorkflowRun(cfg.BuildOwner, cfg.BuildRepo, record.RunID)
 		if err == nil && run != nil && workflowRunMatchesRecord(record, run, inputs) && isActiveWorkflowStatus(run.Status) {
 			return run, nil
 		}
@@ -3045,7 +3047,7 @@ func (h *Handlers) waitForWorkflowRunTerminalState(record *BuildRecord, runID in
 	deadline := time.Now().Add(timeout)
 	var lastRun *WorkflowRun
 	for {
-		run, inputs, err := h.gh.GetWorkflowRun(cfg.BuildOwner, cfg.BuildRepo, runID)
+		run, inputs, err := h.buildGH.GetWorkflowRun(cfg.BuildOwner, cfg.BuildRepo, runID)
 		if err == nil && run != nil && workflowRunMatchesRecord(record, run, inputs) {
 			lastRun = run
 			if isWorkflowRunCompleted(run) {
@@ -3131,7 +3133,7 @@ func (h *Handlers) reconcileBuildRecords(records []BuildRecord, deep bool) []Bui
 			continue
 		}
 		if record.RunID > 0 {
-			run, inputs, err := h.gh.GetWorkflowRun(cfg.BuildOwner, cfg.BuildRepo, record.RunID)
+			run, inputs, err := h.buildGH.GetWorkflowRun(cfg.BuildOwner, cfg.BuildRepo, record.RunID)
 			if err == nil && run != nil && workflowRunMatchesRecord(record, run, inputs) {
 				h.applyWorkflowRunToBuildRecord(record, run)
 				if record.Status == "completed" || record.RunID > 0 {
@@ -3166,7 +3168,7 @@ func (h *Handlers) reconcileBuildRecords(records []BuildRecord, deep bool) []Bui
 	}
 	resolved := make(map[int]struct{})
 	for client, items := range groupedUnresolved {
-		runs, err := h.gh.GetRecentWorkflowRuns(cfg.BuildOwner, cfg.BuildRepo, buildWorkflowFileForClient(client), recentWorkflowRunsSearchLimit)
+		runs, err := h.buildGH.GetRecentWorkflowRuns(cfg.BuildOwner, cfg.BuildRepo, buildWorkflowFileForClient(client), recentWorkflowRunsSearchLimit)
 		if err != nil {
 			continue
 		}
@@ -3188,7 +3190,7 @@ func (h *Handlers) reconcileBuildRecords(records []BuildRecord, deep bool) []Bui
 					}
 				}
 				if shouldReadInputs {
-					inputs, inputsErr = h.gh.GetWorkflowRunInputs(cfg.BuildOwner, cfg.BuildRepo, run.ID)
+					inputs, inputsErr = h.buildGH.GetWorkflowRunInputs(cfg.BuildOwner, cfg.BuildRepo, run.ID)
 				} else {
 					inputsErr = fmt.Errorf("跳过无 request_id 的非候选运行")
 				}
@@ -3248,7 +3250,7 @@ func (h *Handlers) resolveBuildRecordAsset(record *BuildRecord, assetID int64) (
 		return nil, fmt.Errorf("当前打包尚未生成可下载产物")
 	}
 
-	release, err := h.gh.GetReleaseByTag(cfg.BuildOwner, cfg.BuildRepo, releaseTag)
+	release, err := h.buildGH.GetReleaseByTag(cfg.BuildOwner, cfg.BuildRepo, releaseTag)
 	if err != nil {
 		return nil, fmt.Errorf("获取打包产物失败")
 	}
@@ -3349,7 +3351,7 @@ func (h *Handlers) deleteBuildRecordRelease(record *BuildRecord) error {
 	if releaseTag == "" {
 		return nil
 	}
-	return h.gh.DeleteReleaseByTag(cfg.BuildOwner, cfg.BuildRepo, releaseTag)
+	return h.buildGH.DeleteReleaseByTag(cfg.BuildOwner, cfg.BuildRepo, releaseTag)
 }
 
 func (h *Handlers) cleanupOverflowBuildRecords(codeID int, client string) {
@@ -3559,7 +3561,7 @@ func (h *Handlers) TriggerBuild(w http.ResponseWriter, r *http.Request) {
 		"request_id":     requestID,
 	}
 
-	err = h.gh.TriggerWorkflow(cfg.BuildOwner, cfg.BuildRepo, clientConfig.WorkflowFile, inputs)
+	err = h.buildGH.TriggerWorkflow(cfg.BuildOwner, cfg.BuildRepo, clientConfig.WorkflowFile, inputs)
 	if err != nil {
 		progressText := "触发打包失败：" + err.Error()
 		_ = updateBuildRecordStatusProgressExt(record.ID, 0, "completed", "trigger_failed", "server", "", "", 100, progressText, "trigger_failed", "")
@@ -3931,14 +3933,14 @@ func (h *Handlers) HandleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	run, inputs, err := h.gh.GetWorkflowRun(cfg.BuildOwner, cfg.BuildRepo, payload.WorkflowRun.ID)
+	run, inputs, err := h.buildGH.GetWorkflowRun(cfg.BuildOwner, cfg.BuildRepo, payload.WorkflowRun.ID)
 	if err != nil || run == nil {
 		jsonResponse(w, map[string]interface{}{"message": "获取 workflow run 详情失败，已忽略"})
 		return
 	}
 	requestID := strings.TrimSpace(inputs["request_id"])
 	if requestID == "" {
-		if fallbackInputs, err := h.gh.GetWorkflowRunInputs(cfg.BuildOwner, cfg.BuildRepo, payload.WorkflowRun.ID); err == nil {
+		if fallbackInputs, err := h.buildGH.GetWorkflowRunInputs(cfg.BuildOwner, cfg.BuildRepo, payload.WorkflowRun.ID); err == nil {
 			inputs = fallbackInputs
 			requestID = strings.TrimSpace(fallbackInputs["request_id"])
 		}
@@ -4304,7 +4306,7 @@ func (h *Handlers) GetBuildStatus(w http.ResponseWriter, r *http.Request) {
 
 	if record != nil {
 		if record.RunID > 0 {
-			run, inputs, err := h.gh.GetWorkflowRun(cfg.BuildOwner, cfg.BuildRepo, record.RunID)
+			run, inputs, err := h.buildGH.GetWorkflowRun(cfg.BuildOwner, cfg.BuildRepo, record.RunID)
 			if err == nil && run != nil && workflowRunMatchesRecord(record, run, inputs) {
 				matchedRun = run
 				matchedInputs = inputs
@@ -4351,7 +4353,7 @@ func (h *Handlers) GetBuildStatus(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if includeJobs {
-			jobs, err := h.gh.GetWorkflowRunJobs(cfg.BuildOwner, cfg.BuildRepo, matchedRun.ID)
+			jobs, err := h.buildGH.GetWorkflowRunJobs(cfg.BuildOwner, cfg.BuildRepo, matchedRun.ID)
 			if err == nil {
 				result["jobs"] = buildWorkflowJobStatusList(jobs)
 			}
@@ -4362,7 +4364,7 @@ func (h *Handlers) GetBuildStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if cachedRunID, ok := getCachedProfileRunID(cacheKey); ok {
-		run, inputs, err := h.gh.GetWorkflowRun(cfg.BuildOwner, cfg.BuildRepo, cachedRunID)
+		run, inputs, err := h.buildGH.GetWorkflowRun(cfg.BuildOwner, cfg.BuildRepo, cachedRunID)
 		if err == nil {
 			if buildRequestMatchesForClient(inputs, client, profile, requestID, tag, branch, core, platforms) || (requestID == "" && hasPendingBuild && matchRunByPendingBuild(run, pendingBuild)) {
 				matchedRun = run
@@ -4396,7 +4398,7 @@ func (h *Handlers) GetBuildStatus(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		} else {
-			runs, err := h.gh.GetRecentWorkflowRuns(cfg.BuildOwner, cfg.BuildRepo, buildWorkflowFileForClient(client), recentWorkflowRunsSearchLimit)
+			runs, err := h.buildGH.GetRecentWorkflowRuns(cfg.BuildOwner, cfg.BuildRepo, buildWorkflowFileForClient(client), recentWorkflowRunsSearchLimit)
 			if err != nil {
 				jsonError(w, "查询构建状态失败", 500)
 				return
@@ -4416,7 +4418,7 @@ func (h *Handlers) GetBuildStatus(w http.ResponseWriter, r *http.Request) {
 					setCachedProfileRunID(cacheKey, run.ID)
 					break
 				}
-				inputs, err := h.gh.GetWorkflowRunInputs(cfg.BuildOwner, cfg.BuildRepo, run.ID)
+				inputs, err := h.buildGH.GetWorkflowRunInputs(cfg.BuildOwner, cfg.BuildRepo, run.ID)
 				matchesByInputs := err == nil && buildRequestMatchesForClient(inputs, client, profile, requestID, tag, branch, core, platforms)
 				if !matchesByInputs {
 					continue
@@ -4491,7 +4493,7 @@ func (h *Handlers) GetBuildStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if includeJobs {
-		jobs, err := h.gh.GetWorkflowRunJobs(cfg.BuildOwner, cfg.BuildRepo, matchedRun.ID)
+		jobs, err := h.buildGH.GetWorkflowRunJobs(cfg.BuildOwner, cfg.BuildRepo, matchedRun.ID)
 		if err == nil {
 			result["jobs"] = buildWorkflowJobStatusList(jobs)
 		}
@@ -4534,7 +4536,7 @@ func (h *Handlers) CancelBuildRecord(w http.ResponseWriter, r *http.Request) {
 	}
 	if record.Status == "cancel_requested" {
 		if record.RunID > 0 {
-			run, inputs, err := h.gh.GetWorkflowRun(cfg.BuildOwner, cfg.BuildRepo, record.RunID)
+			run, inputs, err := h.buildGH.GetWorkflowRun(cfg.BuildOwner, cfg.BuildRepo, record.RunID)
 			if err == nil && run != nil && workflowRunMatchesRecord(record, run, inputs) && isWorkflowRunCompleted(run) {
 				conclusion := workflowRunConclusion(run)
 				record, _ = h.persistBuildRecordEvent(record, run.ID, run.Status, conclusion, "github", run.HTMLURL, "")
@@ -4566,7 +4568,7 @@ func (h *Handlers) CancelBuildRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if record.RunID > 0 {
-		run, inputs, err := h.gh.GetWorkflowRun(cfg.BuildOwner, cfg.BuildRepo, record.RunID)
+		run, inputs, err := h.buildGH.GetWorkflowRun(cfg.BuildOwner, cfg.BuildRepo, record.RunID)
 		if err == nil && run != nil && workflowRunMatchesRecord(record, run, inputs) && run.Status == "completed" {
 			conclusion := ""
 			if run.Conclusion != nil {
@@ -4612,7 +4614,7 @@ func (h *Handlers) CancelBuildRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.gh.CancelWorkflowRun(cfg.BuildOwner, cfg.BuildRepo, run.ID); err != nil {
+	if err := h.buildGH.CancelWorkflowRun(cfg.BuildOwner, cfg.BuildRepo, run.ID); err != nil {
 		jsonError(w, "停止 GitHub 打包失败: "+err.Error(), 500)
 		return
 	}
@@ -4781,7 +4783,7 @@ func (h *Handlers) GetBuildRecordAssets(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	release, err := h.gh.GetReleaseByTag(cfg.BuildOwner, cfg.BuildRepo, releaseTag)
+	release, err := h.buildGH.GetReleaseByTag(cfg.BuildOwner, cfg.BuildRepo, releaseTag)
 	if err != nil {
 		jsonError(w, "获取打包产物失败", 500)
 		return
@@ -4924,9 +4926,9 @@ func (h *Handlers) DeleteBuildRecord(w http.ResponseWriter, r *http.Request) {
 		githubReleaseCache.delete(githubReleaseCacheKey(cfg.BuildOwner, cfg.BuildRepo, releaseTag))
 	}
 	if record.RunID > 0 {
-		run, inputs, err := h.gh.GetWorkflowRun(cfg.BuildOwner, cfg.BuildRepo, record.RunID)
+		run, inputs, err := h.buildGH.GetWorkflowRun(cfg.BuildOwner, cfg.BuildRepo, record.RunID)
 		if err == nil && run != nil && workflowRunMatchesRecord(record, run, inputs) {
-			if err := h.gh.DeleteWorkflowRun(cfg.BuildOwner, cfg.BuildRepo, record.RunID); err != nil {
+			if err := h.buildGH.DeleteWorkflowRun(cfg.BuildOwner, cfg.BuildRepo, record.RunID); err != nil {
 				jsonError(w, "删除 GitHub Actions 运行失败", 500)
 				return
 			}
@@ -4988,7 +4990,7 @@ func (h *Handlers) DownloadBuildRecordAsset(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	resp, err := h.gh.DownloadReleaseAsset(cfg.BuildOwner, cfg.BuildRepo, matchedAsset.ID)
+	resp, err := h.buildGH.DownloadReleaseAsset(cfg.BuildOwner, cfg.BuildRepo, matchedAsset.ID)
 	if err != nil {
 		jsonError(w, "下载打包产物失败", 500)
 		return
@@ -5050,7 +5052,7 @@ func (h *Handlers) DownloadBuildRecordAssetByToken(w http.ResponseWriter, r *htt
 		return
 	}
 
-	resp, err := h.gh.DownloadReleaseAsset(cfg.BuildOwner, cfg.BuildRepo, matchedAsset.ID)
+	resp, err := h.buildGH.DownloadReleaseAsset(cfg.BuildOwner, cfg.BuildRepo, matchedAsset.ID)
 	if err != nil {
 		writeDownloadLinkStatusPage(w, http.StatusBadGateway, "下载暂时不可用", "服务器暂时无法连接到产物源，请稍后重新获取下载链接再试。")
 		return

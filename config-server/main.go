@@ -21,7 +21,8 @@ var webFS embed.FS
 type Config struct {
 	Port                string
 	ListenHost          string
-	GithubToken         string
+	SourceToken         string
+	BuildToken          string
 	GithubOwner         string
 	GithubRepo          string
 	GithubBranch        string
@@ -46,7 +47,8 @@ func loadConfig() {
 	cfg = Config{
 		Port:                getEnv("PORT", "8080"),
 		ListenHost:          getEnv("LISTEN_HOST", "127.0.0.1"),
-		GithubToken:         getEnv("GITHUB_TOKEN", ""),
+		SourceToken:         mustEnv("SOURCE_TOKEN"),
+		BuildToken:          mustEnv("BUILD_TOKEN"),
 		GithubOwner:         mustEnv("GITHUB_OWNER"),
 		GithubRepo:          mustEnv("GITHUB_REPO"),
 		GithubBranch:        getEnv("GITHUB_BRANCH", "main"),
@@ -64,11 +66,10 @@ func loadConfig() {
 		AdminPassword:       getEnv("ADMIN_PASSWORD", ""),
 		ConfigFilepath:      getEnv("CONFIG_FILEPATH", "assets/config/xboard.config.yaml"),
 	}
-	cfg.GithubToken = mustEnv("GITHUB_TOKEN")
 	cfg.JWTSecret = mustEnv("JWT_SECRET")
 	cfg.AdminPassword = mustEnv("ADMIN_PASSWORD")
 	// 配置只来自专用构建，清除可能由启动器继承的旧凭证变量。
-	for _, key := range []string{"GITHUB_TOKEN", "JWT_SECRET", "ADMIN_PASSWORD", "BUILD_EVENT_TOKEN", "GITHUB_WEBHOOK_SECRET", "SECURE_LOG_PRIVATE_KEY", "DATABASE_ENCRYPTION_KEY"} {
+	for _, key := range []string{"GITHUB_TOKEN", "SOURCE_TOKEN", "SOURCE_READ_TOKEN", "PROFILE_WRITE_TOKEN", "BUILD_TOKEN", "JWT_SECRET", "ADMIN_PASSWORD", "BUILD_EVENT_TOKEN", "GITHUB_WEBHOOK_SECRET", "SECURE_LOG_PRIVATE_KEY", "DATABASE_ENCRYPTION_KEY"} {
 		os.Unsetenv(key)
 	}
 
@@ -130,24 +131,25 @@ func main() {
 	initDB()
 
 	gh := NewGitHubClient(
-		cfg.GithubToken,
+		cfg.SourceToken,
 		cfg.GithubOwner,
 		cfg.GithubRepo,
 		cfg.GithubBranch,
 	)
 	profileGH := NewGitHubClient(
-		cfg.GithubToken,
+		cfg.SourceToken,
 		cfg.GithubOwner,
 		cfg.GithubRepo,
 		cfg.GithubProfileBranch,
 	)
 	nexGenProfileGH := NewGitHubClient(
-		cfg.GithubToken,
+		cfg.SourceToken,
 		cfg.NexGenBuildOwner,
 		cfg.NexGenBuildRepo,
 		cfg.NexGenProfileBranch,
 	)
-	h := NewHandlers(gh, profileGH, nexGenProfileGH)
+	buildGH := NewGitHubClient(cfg.BuildToken, cfg.BuildOwner, cfg.BuildRepo, "main")
+	h := NewHandlers(gh, profileGH, nexGenProfileGH, buildGH)
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
