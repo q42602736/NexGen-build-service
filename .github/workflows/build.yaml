@@ -2102,7 +2102,6 @@ jobs:
         with:
           persist-credentials: false
           path: build-server
-          persist-credentials: false
 
       - name: 通过 Worker 读取软路由源码
         if: steps.check.outputs.should_run == 'true'
