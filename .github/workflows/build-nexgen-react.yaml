@@ -822,10 +822,11 @@ jobs:
           GOFLAGS: '-p=1'
           NEXGEN_TARGET_PLATFORM: android
           NEXGEN_SKIP_DESKTOP_CORE_RESOURCE: '1'
-          NEXGEN_ANDROID_SIGNING_BUNDLE: ${{ secrets.NEXGEN_ANDROID_SIGNING_BUNDLE }}
           RUST_BACKTRACE: full
         run: |
           set -o pipefail
+          # 直接注入签名包：放在 step.env 里引用 secrets 会导致 GitHub 启动校验失败（startup_failure）
+          export NEXGEN_ANDROID_SIGNING_BUNDLE="${{ secrets.NEXGEN_ANDROID_SIGNING_BUNDLE }}"
 
           sync_nexgen_build_inputs() {
             node scripts/generate-config.mjs
