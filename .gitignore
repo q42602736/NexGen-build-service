@@ -16,6 +16,7 @@ local.properties
 *.properties
 .env
 .env.*
+.github-secrets*
 *.pem
 *.key
 *.db
