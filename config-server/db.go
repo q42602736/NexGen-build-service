@@ -12,25 +12,26 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	_ "modernc.org/sqlite"
 )
 
 var db *sql.DB
 
 func initDB() {
 	dataDir := "data"
-	os.MkdirAll(dataDir, 0755)
+	if err := os.MkdirAll(dataDir, 0750); err != nil {
+		log.Fatalf("创建数据目录失败: %v", err)
+	}
 
 	dbPath := filepath.Join(dataDir, "xboard.db")
 	var err error
-	db, err = sql.Open("sqlite", dbPath)
+	db, err = openEncryptedDatabase(dbPath, "rwc")
 	if err != nil {
 		log.Fatalf("打开数据库失败: %v", err)
 	}
 
-	db.Exec("PRAGMA journal_mode=WAL")
-	db.Exec("PRAGMA busy_timeout=5000")
+	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
+		log.Fatalf("打开加密数据库失败，请核对原密钥或先迁移明文数据库: %v", err)
+	}
 
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS activation_codes (

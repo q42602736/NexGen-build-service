@@ -11,11 +11,11 @@ chmod 700 dist
 
 OUTPUT="dist/nexgen-client"
 TMP_OUTPUT="${OUTPUT}.tmp"
-CONFIG_PATH=${NEXGEN_EMBED_CONFIG:-}
+CONFIG_PATH=${NEXGEN_EMBED_CONFIG:-"$SCRIPT_DIR/.env"}
 GARBLE_BIN=${GARBLE_BIN:-garble}
 
-if [ -z "$CONFIG_PATH" ] || [ ! -f "$CONFIG_PATH" ]; then
-  echo "请通过 NEXGEN_EMBED_CONFIG 指定受保护的专用构建 JSON 配置" >&2
+if [ ! -f "$CONFIG_PATH" ]; then
+  echo "未找到本地 .env；请在 config-server/.env 填写私有配置并设置权限 0600" >&2
   exit 1
 fi
 
@@ -28,29 +28,7 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-python3 - "$CONFIG_PATH" "$WORK_DIR" "$SCRIPT_DIR" <<'PY'
-import json, os, pathlib, stat, sys
-source = pathlib.Path(sys.argv[1])
-work = pathlib.Path(sys.argv[2])
-root = pathlib.Path(sys.argv[3])
-if stat.S_IMODE(source.stat().st_mode) & 0o077:
-    raise SystemExit("专用配置文件必须仅允许所有者读取")
-values = json.loads(source.read_text())
-required = ("GITHUB_TOKEN", "GITHUB_OWNER", "GITHUB_REPO", "JWT_SECRET", "ADMIN_PASSWORD", "BUILD_EVENT_TOKEN", "GITHUB_WEBHOOK_SECRET", "SECURE_LOG_PRIVATE_KEY")
-if not isinstance(values, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in values.items()):
-    raise SystemExit("专用配置格式无效")
-if any(not values.get(key) for key in required) or any(key.startswith("CF_WORKER_") for key in values):
-    raise SystemExit("专用配置缺少必需字段或仍包含旧 Worker 配置")
-lines = ["package main", "", "var embeddedEnvironment = map[string]string{"]
-for key, value in sorted(values.items()):
-    lines.append("\t" + json.dumps(key, ensure_ascii=False) + ": " + json.dumps(value, ensure_ascii=False) + ",")
-lines.append("}")
-replacement = work / "embedded_config.go"
-replacement.write_text("\n".join(lines) + "\n")
-os.chmod(replacement, 0o600)
-overlay = {"Replace": {str(root / "embedded_config.go"): str(replacement)}}
-(work / "overlay.json").write_text(json.dumps(overlay))
-PY
+go run ./cmd/embed-config "$CONFIG_PATH" "$WORK_DIR" "$SCRIPT_DIR"
 
 : "${GOMAXPROCS:=2}"
 : "${GOFLAGS:=-p=1}"

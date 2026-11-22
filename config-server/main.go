@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -67,7 +68,7 @@ func loadConfig() {
 	cfg.JWTSecret = mustEnv("JWT_SECRET")
 	cfg.AdminPassword = mustEnv("ADMIN_PASSWORD")
 	// 配置只来自专用构建，清除可能由启动器继承的旧凭证变量。
-	for _, key := range []string{"GITHUB_TOKEN", "JWT_SECRET", "ADMIN_PASSWORD", "BUILD_EVENT_TOKEN", "GITHUB_WEBHOOK_SECRET", "SECURE_LOG_PRIVATE_KEY"} {
+	for _, key := range []string{"GITHUB_TOKEN", "JWT_SECRET", "ADMIN_PASSWORD", "BUILD_EVENT_TOKEN", "GITHUB_WEBHOOK_SECRET", "SECURE_LOG_PRIVATE_KEY", "DATABASE_ENCRYPTION_KEY"} {
 		os.Unsetenv(key)
 	}
 
@@ -107,12 +108,23 @@ func mustEnv(key string) string {
 }
 
 func main() {
+	// 数据库、WAL 和共享内存文件默认仅允许服务账户读写。
+	syscall.Umask(0077)
 	loadConfig()
+	if _, err := databaseEncryptionKey(); err != nil {
+		log.Fatal(err)
+	}
 	if len(os.Args) == 2 && os.Args[1] == "--check-config" {
 		if _, err := loadSecureLogPrivateKey(); err != nil {
 			log.Fatal(err)
 		}
-		fmt.Println("内置配置及日志私钥检查通过")
+		fmt.Println("内置配置、数据库密钥及日志私钥检查通过")
+		return
+	}
+	if len(os.Args) > 1 {
+		if err := runDatabaseCommand(os.Args[1:]); err != nil {
+			log.Fatal(err)
+		}
 		return
 	}
 	initDB()

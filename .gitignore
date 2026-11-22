@@ -14,6 +14,14 @@ ANDROID_SIGNING_CONFIG.md
 # ============================================
 local.properties
 *.properties
+.env
+.env.*
+*.pem
+*.key
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
 
 # ============================================
 # macOS 系统文件
