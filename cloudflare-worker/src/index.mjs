@@ -1,7 +1,6 @@
 import { decryptLogBatch, equalSecret, fetchWithoutRedirect, json, readJSON, signature, signToken, verifySignature, verifyToken } from "./crypto.mjs";
 import { githubRequest, gitReadRequest } from "./github.mjs";
 import { isGitHubWorkflow } from "./identity.mjs";
-import { assetRequest } from "./assets.mjs";
 
 const encoder = new TextEncoder();
 
@@ -49,7 +48,6 @@ export default {
       if (!role) return json({ error: "调用凭证无效" }, 401);
       if (path.startsWith("/github/")) return await githubRequest(request, env, role);
       if (path.startsWith("/git/")) return await gitReadRequest(request, env, role);
-      if (path.startsWith("/v1/assets/") && role === "workflow") return await assetRequest(request, env, path);
       if (role !== "server") return json({ error: "操作未授权" }, 403);
       if (request.method !== "POST") return json({ error: "请求方法无效" }, 405);
       const payload = await readJSON(request, path === "/v1/logs/decrypt" ? 32 * 1024 * 1024 : 1024 * 1024);

@@ -233,6 +233,9 @@ jobs:
             -d "$PAYLOAD"
 
   build:
+    permissions:
+      contents: write
+      id-token: write
     needs: prepare-release
     runs-on: ${{ matrix.os }}
     defaults:
@@ -1292,9 +1295,9 @@ jobs:
       - name: Upload dist to Draft Release
         if: success() && steps.check.outputs.should_run == 'true'
         env:
-          GH_TOKEN: oidc
+          GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ needs.prepare-release.outputs.release_id }}
-          RELEASE_UPLOAD_URL: ${{ secrets.CF_WORKER_URL }}/uploads/repos/${{ github.repository }}/releases/${{ needs.prepare-release.outputs.release_id }}/assets
+          RELEASE_UPLOAD_URL: https://uploads.github.com/repos/${{ github.repository }}/releases/${{ needs.prepare-release.outputs.release_id }}/assets
           CONFIG_SERVER_URL: ${{ secrets.CF_WORKER_URL }}
           CONFIG_SERVER_EVENT_TOKEN: oidc
           REQUEST_ID: ${{ github.event.inputs.request_id }}
@@ -1428,6 +1431,9 @@ jobs:
           rm -f asset_count.txt
 
   build-linux:
+    permissions:
+      contents: write
+      id-token: write
     needs: prepare-release
     if: ${{ github.event.inputs.core != 'xray' }}
     runs-on: ${{ matrix.os }}
@@ -1897,9 +1903,9 @@ jobs:
       - name: Upload dist to Draft Release
         if: success() && steps.check.outputs.should_run == 'true'
         env:
-          GH_TOKEN: oidc
+          GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ needs.prepare-release.outputs.release_id }}
-          RELEASE_UPLOAD_URL: ${{ secrets.CF_WORKER_URL }}/uploads/repos/${{ github.repository }}/releases/${{ needs.prepare-release.outputs.release_id }}/assets
+          RELEASE_UPLOAD_URL: https://uploads.github.com/repos/${{ github.repository }}/releases/${{ needs.prepare-release.outputs.release_id }}/assets
           CONFIG_SERVER_URL: ${{ secrets.CF_WORKER_URL }}
           CONFIG_SERVER_EVENT_TOKEN: oidc
           REQUEST_ID: ${{ github.event.inputs.request_id }}
@@ -2033,6 +2039,9 @@ jobs:
           rm -f asset_count.txt
 
   build-router:
+    permissions:
+      contents: write
+      id-token: write
     needs: prepare-release
     if: ${{ github.event.inputs.core != 'xray' }}
     runs-on: ubuntu-24.04
@@ -2197,6 +2206,8 @@ jobs:
 
       - name: 上传软路由安装包
         if: steps.check.outputs.should_run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           shopt -s nullglob
           PACKAGES=(source/dist/router/*.ipk)
@@ -2247,6 +2258,9 @@ jobs:
 
   # 从 Draft Release 汇总所有平台产物并回传合集包
   merge-artifacts:
+    permissions:
+      contents: write
+      id-token: write
     runs-on: ubuntu-latest
     needs: [ prepare-release, build, build-linux, build-router ]
     if: ${{ !cancelled() && needs.build.result == 'success' && (needs.build-linux.result == 'success' || needs.build-linux.result == 'skipped') && (needs.build-router.result == 'success' || needs.build-router.result == 'skipped') }}
@@ -2381,9 +2395,9 @@ jobs:
       - name: Upload merged bundle to Draft Release
         if: steps.check.outputs.has_artifacts == 'true'
         env:
-          GH_TOKEN: oidc
+          GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ needs.prepare-release.outputs.release_id }}
-          RELEASE_UPLOAD_URL: ${{ secrets.CF_WORKER_URL }}/uploads/repos/${{ github.repository }}/releases/${{ needs.prepare-release.outputs.release_id }}/assets
+          RELEASE_UPLOAD_URL: https://uploads.github.com/repos/${{ github.repository }}/releases/${{ needs.prepare-release.outputs.release_id }}/assets
         run: |
           PACKAGE_NAME="${{ steps.package.outputs.package_name }}"
           ASSETS_RESPONSE=$(curl -sS --fail -H "Authorization: token $GH_TOKEN" \

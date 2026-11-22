@@ -367,6 +367,9 @@ jobs:
           NODE
 
   build:
+    permissions:
+      contents: write
+      id-token: write
     needs: [prepare-release, resolve-build-matrix]
     strategy:
       fail-fast: false
@@ -1299,9 +1302,9 @@ jobs:
       - name: Upload Release Assets
         shell: bash
         env:
-          GH_TOKEN: oidc
+          GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ needs.prepare-release.outputs.release_id }}
-          UPLOAD_URL: ${{ secrets.CF_WORKER_URL }}/uploads/repos/${{ github.repository }}/releases/${{ needs.prepare-release.outputs.release_id }}/assets
+          UPLOAD_URL: https://uploads.github.com/repos/${{ github.repository }}/releases/${{ needs.prepare-release.outputs.release_id }}/assets
           APP_NAME: ${{ needs.prepare-release.outputs.app_name }}
           SAFE_APP_NAME: ${{ needs.prepare-release.outputs.safe_app_name }}
           VERSION: ${{ github.event.inputs.tag }}
@@ -1505,6 +1508,9 @@ jobs:
 
   # 从 Draft Release 汇总所有平台产物并回传合集包
   merge-artifacts:
+    permissions:
+      contents: write
+      id-token: write
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -1653,9 +1659,9 @@ jobs:
       - name: Upload merged bundle to Draft Release
         if: steps.check.outputs.has_artifacts == 'true'
         env:
-          GH_TOKEN: oidc
+          GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ needs.prepare-release.outputs.release_id }}
-          RELEASE_UPLOAD_URL: ${{ secrets.CF_WORKER_URL }}/uploads/repos/${{ github.repository }}/releases/${{ needs.prepare-release.outputs.release_id }}/assets
+          RELEASE_UPLOAD_URL: https://uploads.github.com/repos/${{ github.repository }}/releases/${{ needs.prepare-release.outputs.release_id }}/assets
         run: |
           PACKAGE_NAME="${{ steps.package.outputs.package_name }}"
           VERSION="${{ github.event.inputs.tag }}"

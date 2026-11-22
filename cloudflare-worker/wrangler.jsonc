@@ -7,11 +7,5 @@
   "keep_vars": true,
   "observability": {
     "enabled": false
-  },
-  "r2_buckets": [
-    {
-      "binding": "ARTIFACT_UPLOADS",
-      "bucket_name": "nexgen-build-uploads"
-    }
-  ]
+  }
 }

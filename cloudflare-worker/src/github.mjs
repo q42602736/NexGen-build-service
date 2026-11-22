@@ -122,13 +122,6 @@ export async function githubRequest(request, env, role) {
     await response.body?.cancel();
     response = await fetchWithoutRedirect(target);
   }
-  if (pieces[0] === "releases" && accept !== "application/octet-stream" && response.headers.get("Content-Type")?.includes("json")) {
-    const data = await response.json();
-    for (const release of Array.isArray(data) ? data : [data]) {
-      if (typeof release?.upload_url === "string") release.upload_url = release.upload_url.replace("https://uploads.github.com", env.WORKER_URL + "/uploads");
-    }
-    return new Response(JSON.stringify(data), { status: response.status, headers: responseHeaders(response) });
-  }
   return new Response(response.status === 204 ? null : response.body, { status: response.status, headers: responseHeaders(response) });
 }
 
