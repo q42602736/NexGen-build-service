@@ -83,27 +83,12 @@ jobs:
       artifact_app_name: ${{ steps.config.outputs.artifact_app_name }}
       safe_app_name: ${{ steps.config.outputs.safe_app_name }}
     steps:
-      - name: Validate Config Server Callback
+      - name: Validate Source Token
         env:
           SOURCE_TOKEN: ${{ secrets.SOURCE_TOKEN }}
-          CONFIG_SERVER_URL: ${{ secrets.CONFIG_SERVER_URL }}
-          CONFIG_SERVER_EVENT_TOKEN: ${{ secrets.CONFIG_SERVER_EVENT_TOKEN }}
-          REQUEST_ID: ${{ github.event.inputs.request_id }}
         run: |
           if [ -z "$SOURCE_TOKEN" ]; then
             echo "::error::缺少源码凭证 SOURCE_TOKEN"
-            exit 1
-          fi
-          if [ -z "$REQUEST_ID" ]; then
-            echo "::error::缺少 request_id，配置服务器无法绑定本次打包记录。"
-            exit 1
-          fi
-          if [ -z "$CONFIG_SERVER_URL" ]; then
-            echo "::error::缺少 GitHub Actions secret: CONFIG_SERVER_URL"
-            exit 1
-          fi
-          if [ -z "$CONFIG_SERVER_EVENT_TOKEN" ]; then
-            echo "::error::缺少 GitHub Actions secret: CONFIG_SERVER_EVENT_TOKEN"
             exit 1
           fi
 
@@ -268,8 +253,6 @@ jobs:
 
       - name: Bind Build Record
         env:
-          CONFIG_SERVER_URL: ${{ secrets.CONFIG_SERVER_URL }}
-          CONFIG_SERVER_EVENT_TOKEN: ${{ secrets.CONFIG_SERVER_EVENT_TOKEN }}
           REQUEST_ID: ${{ github.event.inputs.request_id }}
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -1186,8 +1169,6 @@ jobs:
           APP_NAME: ${{ needs.prepare-release.outputs.app_name }}
           SAFE_APP_NAME: ${{ needs.prepare-release.outputs.safe_app_name }}
           VERSION: ${{ github.event.inputs.tag }}
-          CONFIG_SERVER_URL: ${{ secrets.CONFIG_SERVER_URL }}
-          CONFIG_SERVER_EVENT_TOKEN: ${{ secrets.CONFIG_SERVER_EVENT_TOKEN }}
           REQUEST_ID: ${{ github.event.inputs.request_id }}
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
