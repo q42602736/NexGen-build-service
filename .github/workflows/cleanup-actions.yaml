@@ -1,14 +1,6 @@
 name: cleanup-actions
 
 on:
-  workflow_run:
-    workflows:
-      - build
-      - build-nexgen-react
-    types:
-      - completed
-  schedule:
-    - cron: "17 3 * * *"
   workflow_dispatch:
 
 permissions:
