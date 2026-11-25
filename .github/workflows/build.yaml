@@ -40,7 +40,7 @@ on:
         type: string
         default: 'all'
         # 可选值: all, windows, windows-amd64, windows-arm64, android, android-tv, linux, linux-arm64, linux-amd64, openwrt, macos-arm64, macos-amd64, ios
-        # 注意: all 包含 windows/linux/macos 双架构、android-tv 和软路由；openwrt 默认生成 x86_64 与 ARM64 两个 IPK 包
+        # 注意: all 包含 windows/linux/macos 双架构、android-tv 和软路由；openwrt 默认生成 x86_64 与 ARM64 两个架构的 IPK 和 APK 包
         # ios 默认同时产出巨魔版和普通待签名版 IPA，无需提供证书；需要 macOS runner，不包含在 all 中
         # 示例: windows,android 或 windows-arm64,linux-amd64,macos-arm64
       request_id:
@@ -2019,7 +2019,7 @@ jobs:
           go-version: stable
           cache-dependency-path: source/core/Clash.Meta/go.sum
 
-      - name: 安装 IPK 打包依赖
+      - name: 安装软路由打包依赖
         if: steps.check.outputs.should_run == 'true'
         run: |
           sudo apt-get update
@@ -2039,8 +2039,8 @@ jobs:
           PROFILE_BRANCH: ${{ github.event.inputs.profile_branch }}
         run: |
           ROUTER_SCRIPT="source/router/luci-app-xboard-openclash/build-standalone-ipk.sh"
-          if [ ! -f "$ROUTER_SCRIPT" ] || ! grep -q 'ROUTER_PROFILE_DIR' "$ROUTER_SCRIPT" || ! grep -q 'ROUTER_GOARCH' "$ROUTER_SCRIPT"; then
-            echo "::error::所选源码分支缺少软路由双架构及档案注入支持，请先同步老客户端打包脚本。"
+          if [ ! -f "$ROUTER_SCRIPT" ] || ! grep -q 'ROUTER_PROFILE_DIR' "$ROUTER_SCRIPT" || ! grep -q 'ROUTER_GOARCH' "$ROUTER_SCRIPT" || ! grep -q 'PKG_FORMATS' "$ROUTER_SCRIPT"; then
+            echo "::error::所选源码分支缺少软路由双架构、档案注入或 APK 打包支持，请先同步老客户端打包脚本。"
             exit 1
           fi
           PROFILE_PATH="profiles/$PROFILE_NAME.yaml"
@@ -2068,12 +2068,13 @@ jobs:
             router-profile.yaml source router-profile "$PROFILE_NAME"
           printf '%s\n' "$PINYIN_NAME" > router-profile/package_slug
 
-      - name: 生成软路由 IPK
+      - name: 生成软路由 IPK 与 APK
         if: steps.check.outputs.should_run == 'true'
         env:
           ARCH: ${{ matrix.ipk_arch }}
           VERSION: ${{ github.event.inputs.tag }}
           RELEASE: ${{ github.run_number }}
+          PKG_FORMATS: both
           ROUTER_PROFILE_DIR: ${{ github.workspace }}/router-profile
         run: sh source/router/luci-app-xboard-openclash/build-standalone-ipk.sh
 
@@ -2083,17 +2084,24 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           shopt -s nullglob
-          PACKAGES=(source/dist/router/*.ipk)
-          if [ "${#PACKAGES[@]}" -ne 1 ]; then
-            echo "::error::当前软路由架构必须生成一个 IPK 安装包。"
+          IPK_PACKAGES=(source/dist/router/*.ipk)
+          APK_PACKAGES=(source/dist/router/*.apk)
+          if [ "${#IPK_PACKAGES[@]}" -ne 1 ] || [ "${#APK_PACKAGES[@]}" -ne 1 ]; then
+            echo "::error::当前软路由架构必须同时生成一个 IPK 和一个 APK 安装包（实际 ipk=${#IPK_PACKAGES[@]}, apk=${#APK_PACKAGES[@]}）。"
             exit 1
           fi
-          gh release upload "$RELEASE_TAG" "${PACKAGES[0]}" "${PACKAGES[0]}.sha256" --clobber
+          UPLOAD_FILES=(
+            "${IPK_PACKAGES[0]}"
+            "${IPK_PACKAGES[0]}.sha256"
+            "${APK_PACKAGES[0]}"
+            "${APK_PACKAGES[0]}.sha256"
+          )
+          gh release upload "$RELEASE_TAG" "${UPLOAD_FILES[@]}" --clobber
           UPLOADED_NAMES=$(gh api "repos/$GH_REPO/releases/$RELEASE_ID/assets" --paginate \
             --jq '.[] | select(.state == "uploaded") | .name')
-          for file in "${PACKAGES[0]}" "${PACKAGES[0]}.sha256"; do
+          for file in "${UPLOAD_FILES[@]}"; do
             if ! printf '%s\n' "$UPLOADED_NAMES" | grep -Fx -- "$(basename "$file")" > /dev/null; then
-              echo "::error::软路由产物上传后校验失败。"
+              echo "::error::软路由产物上传后校验失败：$(basename "$file")"
               exit 1
             fi
           done
@@ -2144,15 +2152,16 @@ jobs:
 
             # 从构建产物文件名中提取拼音应用名称
             # 例如：Qieyun-1.0.0-android-arm64-v8a.apk -> Qieyun
-            FIRST_FILE=$(find ./dist -type f \( -iname "*.apk" -o -iname "*.dmg" -o -iname "*.exe" -o -iname "*.deb" -o -iname "*.appimage" -o -iname "*.rpm" -o -iname "*.ipa" \) | head -1)
+            # 优先匹配非软路由产物（排除 luci-app-*.apk），避免软路由 .apk 被按普通客户端规则误截成 luci
+            FIRST_FILE=$(find ./dist -type f -not -iname "luci-app-*" \( -iname "*.apk" -o -iname "*.dmg" -o -iname "*.exe" -o -iname "*.deb" -o -iname "*.appimage" -o -iname "*.rpm" -o -iname "*.ipa" \) | head -1)
             if [ -z "$FIRST_FILE" ]; then
-              FIRST_FILE=$(find ./dist -type f -iname "*.ipk" | head -1)
+              FIRST_FILE=$(find ./dist -type f \( -iname "*.ipk" -o -iname "luci-app-*.apk" \) | head -1)
             fi
             if [ -n "$FIRST_FILE" ]; then
               FILENAME=$(basename "$FIRST_FILE")
               # 提取第一个 - 之前的部分作为拼音应用名称
               case "$FILENAME" in
-                luci-app-*.ipk)
+                luci-app-*.ipk|luci-app-*.apk)
                   PINYIN_NAME=${FILENAME#luci-app-}
                   PINYIN_NAME=${PINYIN_NAME%%_*}
                   ;;

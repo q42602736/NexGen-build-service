@@ -4862,7 +4862,7 @@
 	                                <label class="platform-checkbox"><input type="checkbox" value="macos-amd64" class="platformItem" data-cores="mihomo,xray"><span class="platform-checkbox-label">macOS AMD64</span></label>
 	                                <label class="platform-checkbox"><input type="checkbox" value="ios" class="platformItem" data-cores="mihomo"><span class="platform-checkbox-label">iOS（巨魔版 + 待签名版）</span></label>
 	                            </div>
-	                            <div class="help-text" id="buildPlatformHelpText">勾选软路由会同时生成 x86_64、ARM64 两个 IPK 包；“全部平台”包含软路由。Android TV 会生成两个架构的 TV 安装包。iOS 一次生成巨魔版和普通待签名版两份 IPA，无需提前提供证书；巨魔版用 TrollStore 安装，普通版用签名软件签名后安装。iOS 不在“全部平台”里，需要单独勾选。</div>
+	                            <div class="help-text" id="buildPlatformHelpText">勾选软路由会同时生成 x86_64、ARM64 两个架构的 IPK 和 APK 包；“全部平台”包含软路由。Android TV 会生成两个架构的 TV 安装包。iOS 一次生成巨魔版和普通待签名版两份 IPA，无需提前提供证书；巨魔版用 TrollStore 安装，普通版用签名软件签名后安装。iOS 不在“全部平台”里，需要单独勾选。</div>
 	                        </div>
                         <div id="buildQueue" style="margin-top: 15px; padding: 10px 14px; background: rgba(0,0,0,0.2); border-radius: 6px; display: flex; align-items: center; gap: 10px;">
                             <span style="color: #aaa; font-size: 13px;">打包队列：</span>
@@ -5809,7 +5809,7 @@
 	            if (getSelectedBuildCore() === 'xray') {
 	                help.textContent = 'Xray 内核当前只支持 Windows ARM64/AMD64、Android（手机）和 macOS ARM64/AMD64；Linux、Android TV 与软路由已自动隐藏。';
 	            } else {
-	                help.textContent = '勾选软路由会同时生成 x86_64、ARM64 两个 IPK 包；“全部平台”包含软路由。Android TV 会生成两个架构的 TV 安装包。iOS 一次生成巨魔版和普通待签名版两份 IPA，无需提前提供证书；巨魔版用 TrollStore 安装，普通版用签名软件签名后安装。iOS 不在“全部平台”里，需要单独勾选。';
+	                help.textContent = '勾选软路由会同时生成 x86_64、ARM64 两个架构的 IPK 和 APK 包；“全部平台”包含软路由。Android TV 会生成两个架构的 TV 安装包。iOS 一次生成巨魔版和普通待签名版两份 IPA，无需提前提供证书；巨魔版用 TrollStore 安装，普通版用签名软件签名后安装。iOS 不在“全部平台”里，需要单独勾选。';
 	            }
 	        }
 
