@@ -41,6 +41,16 @@ on:
         description: '构建请求唯一标识'
         required: false
         type: string
+      android_signing_mode:
+        description: 'Android 签名模式：legacy（默认全局固定签名）或 profile（档案专属新证书）'
+        required: false
+        type: string
+        default: 'legacy'
+      android_signing_envelope:
+        description: '本次打包一次性加密的档案专属安卓证书信封（android_signing_mode=profile 时使用）'
+        required: false
+        type: string
+        default: ''
 
 run-name: nexgen-${{ github.event.inputs.request_id || github.run_id }}-${{ github.event.inputs.profile }}-${{ github.event.inputs.tag }}
 
@@ -770,6 +780,14 @@ jobs:
           set -o pipefail
           # 直接注入签名包：放在 step.env 里引用 secrets 会导致 GitHub 启动校验失败（startup_failure）
           export NEXGEN_ANDROID_SIGNING_BUNDLE="${{ secrets.NEXGEN_ANDROID_SIGNING_BUNDLE }}"
+          export GH_TOKEN="${{ secrets.SOURCE_TOKEN }}"
+          export ANDROID_SIGNING_MODE="${{ github.event.inputs.android_signing_mode }}"
+          export ANDROID_SIGNING_ENVELOPE="${{ github.event.inputs.android_signing_envelope }}"
+          export BUILD_REQUEST_ID="${{ github.event.inputs.request_id }}"
+          export EXPECTED_ANDROID_CERT_SHA256=""
+          if [ -n "${ANDROID_SIGNING_ENVELOPE:-}" ]; then
+            echo "::add-mask::$ANDROID_SIGNING_ENVELOPE"
+          fi
 
           sync_nexgen_build_inputs() {
             node scripts/generate-config.mjs
@@ -790,6 +808,88 @@ jobs:
           }
 
           configure_android_signing() {
+            if [ "${ANDROID_SIGNING_MODE:-legacy}" = "profile" ]; then
+              if [ -z "${ANDROID_SIGNING_ENVELOPE:-}" ] || [ -z "${BUILD_REQUEST_ID:-}" ]; then
+                echo "::error::缺少档案专属安卓加密证书信封或构建标识。"
+                exit 1
+              fi
+              if [ -z "${GH_TOKEN:-}" ]; then
+                echo "::error::缺少 SOURCE_TOKEN，无法解密档案专属安卓证书。"
+                exit 1
+              fi
+
+              local signing_dir key_alias cert_sha256 cert_subject store_pass
+              signing_dir="$(mktemp -d)"
+
+              node - "$signing_dir" <<'NODE'
+          const crypto = require("crypto");
+          const fs = require("fs");
+          const path = require("path");
+
+          const outDir = process.argv[2];
+          const sourceToken = String(process.env.GH_TOKEN || "").trim();
+          const requestId = String(process.env.BUILD_REQUEST_ID || "").trim();
+          const envelope = String(process.env.ANDROID_SIGNING_ENVELOPE || "").trim();
+
+          const parts = envelope.split(":");
+          if (parts.length !== 5 || parts[0] !== "v1") {
+            console.error("::error::档案专属安卓加密证书信封格式无效。");
+            process.exit(1);
+          }
+
+          const [, signingId, nonceB64, tagB64, cipherB64] = parts;
+          const aesKey = crypto.createHash("sha256").update("nexgen-dispatch-v1:" + sourceToken + ":" + requestId, "utf8").digest();
+          let plainBuf;
+          try {
+            const decipher = crypto.createDecipheriv("aes-256-gcm", aesKey, Buffer.from(nonceB64, "base64"));
+            decipher.setAAD(Buffer.from("nexgen-android-signing-dispatch-v1:" + signingId, "utf8"));
+            decipher.setAuthTag(Buffer.from(tagB64, "base64"));
+            plainBuf = Buffer.concat([decipher.update(Buffer.from(cipherB64, "base64")), decipher.final()]);
+          } catch {
+            console.error("::error::解密档案专属安卓证书失败，请核对两端 SOURCE_TOKEN 是否一致。");
+            process.exit(1);
+          }
+
+          const bundle = JSON.parse(plainBuf.toString("utf8"));
+          if (!bundle.private_key_pem || !bundle.certificate_pem || !bundle.key_alias || !bundle.cert_sha256) {
+            console.error("::error::解密后的安卓证书包字段不完整。");
+            process.exit(1);
+          }
+          fs.writeFileSync(path.join(outDir, "private_key.pem"), bundle.private_key_pem, { mode: 0o600 });
+          fs.writeFileSync(path.join(outDir, "certificate.pem"), bundle.certificate_pem, { mode: 0o600 });
+          fs.writeFileSync(path.join(outDir, "meta.json"), JSON.stringify({
+            key_alias: String(bundle.key_alias),
+            cert_sha256: String(bundle.cert_sha256).toLowerCase(),
+            subject: String(bundle.subject || ""),
+          }), { mode: 0o600 });
+          NODE
+
+              key_alias="$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).key_alias)' "$signing_dir/meta.json")"
+              cert_sha256="$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).cert_sha256)' "$signing_dir/meta.json")"
+              cert_subject="$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).subject)' "$signing_dir/meta.json")"
+              store_pass="$(openssl rand -hex 16)"
+
+              openssl pkcs12 -export \
+                -inkey "$signing_dir/private_key.pem" \
+                -in "$signing_dir/certificate.pem" \
+                -name "$key_alias" \
+                -out "$signing_dir/keystore.jks" \
+                -passout "pass:$store_pass"
+
+              if command -v keytool >/dev/null 2>&1; then
+                keytool -list -keystore "$signing_dir/keystore.jks" -storepass "$store_pass" >/dev/null
+              fi
+
+              mkdir -p src-tauri/gen/android/app
+              cp "$signing_dir/keystore.jks" src-tauri/gen/android/app/keystore.jks
+              printf 'storePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' "$store_pass" "$key_alias" "$store_pass" > src-tauri/gen/android/local.properties
+              chmod 600 src-tauri/gen/android/app/keystore.jks src-tauri/gen/android/local.properties
+              rm -rf "$signing_dir"
+              EXPECTED_ANDROID_CERT_SHA256="$cert_sha256"
+              echo "已配置档案专属 Android 新证书（subject=${cert_subject} alias=${key_alias} sha256=${cert_sha256}）。"
+              return 0
+            fi
+
             if [ -z "${NEXGEN_ANDROID_SIGNING_BUNDLE:-}" ]; then
               echo "::error::未配置 NEXGEN_ANDROID_SIGNING_BUNDLE，无法生成固定签名 Android APK。"
               exit 1
@@ -810,7 +910,7 @@ jobs:
             cp "$signing_dir/local.properties" src-tauri/gen/android/local.properties
             chmod 600 src-tauri/gen/android/app/keystore.jks src-tauri/gen/android/local.properties
             rm -rf "$signing_dir"
-            echo "已配置 NexGen Android 固定签名。"
+            echo "已配置 NexGen Android 默认固定签名。"
           }
 
           print_android_jni_libs() {
@@ -1024,11 +1124,20 @@ jobs:
               echo "::warning::未找到 apksigner，跳过 APK 签名验证：$apk_file"
               return 0
             fi
-            if ! "$apksigner" verify --verbose "$apk_file" > apksigner.log 2>&1; then
+            if ! "$apksigner" verify --verbose --print-certs "$apk_file" > apksigner.log 2>&1; then
               cat apksigner.log
               echo "::error::Android APK 未通过签名验证：$apk_file"
               print_android_diagnostics
               exit 1
+            fi
+            if [ -n "${EXPECTED_ANDROID_CERT_SHA256:-}" ]; then
+              if ! grep -iq "$EXPECTED_ANDROID_CERT_SHA256" apksigner.log; then
+                cat apksigner.log
+                echo "::error::Android APK 签名证书 SHA-256 与预期不一致，预期：${EXPECTED_ANDROID_CERT_SHA256}"
+                print_android_diagnostics
+                exit 1
+              fi
+              echo "Android APK 档案专属证书指纹校验通过（sha256=${EXPECTED_ANDROID_CERT_SHA256}）：$apk_file"
             fi
           }
 
