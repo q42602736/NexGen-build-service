@@ -1251,6 +1251,58 @@
             white-space: nowrap;
             color: inherit;
         }
+        .android-signing-box {
+            margin-top: 14px;
+            padding: 12px 14px;
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 10px;
+            background: rgba(0,0,0,0.22);
+        }
+        .android-signing-row {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 12px;
+            margin-top: 8px;
+        }
+        .android-signing-badge {
+            font-size: 12px;
+            color: #9ba8b8;
+            line-height: 1.5;
+        }
+        .android-signing-badge.is-active {
+            color: #00ff88;
+        }
+        .android-signing-badge.is-warn {
+            color: #ffb84d;
+        }
+        .android-signing-warning {
+            margin-top: 10px;
+            padding: 10px 12px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 169, 64, 0.45);
+            background: rgba(255, 145, 0, 0.12);
+            color: #ffd599;
+            font-size: 12px;
+            line-height: 1.65;
+            font-weight: 600;
+        }
+        .android-signing-warning.is-danger {
+            border-color: rgba(255, 107, 107, 0.55);
+            background: rgba(255, 77, 79, 0.14);
+            color: #ffb3b3;
+        }
+        .android-signing-meta {
+            margin-top: 8px;
+            padding: 8px 10px;
+            border-radius: 6px;
+            background: rgba(255,255,255,0.03);
+            color: #9fb3c8;
+            font-size: 12px;
+            line-height: 1.6;
+            word-break: break-all;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        }
         .btn-build { background: linear-gradient(135deg, #ff6b6b, #ee5a5a); color: #fff; }
         .btn-build:hover { background: linear-gradient(135deg, #ff5252, #e04545); }
         .support-item { background: rgba(0,0,0,0.2); border-radius: 8px; padding: 15px; margin-bottom: 10px; position: relative; }
@@ -4864,6 +4916,18 @@
 	                            </div>
 	                            <div class="help-text" id="buildPlatformHelpText">勾选软路由会同时生成 x86_64、ARM64 两个架构的 IPK 和 APK 包；“全部平台”包含软路由。Android TV 会生成两个架构的 TV 安装包。iOS 一次生成巨魔版和普通待签名版两份 IPA，无需提前提供证书；巨魔版用 TrollStore 安装，普通版用签名软件签名后安装。iOS 不在“全部平台”里，需要单独勾选。</div>
 	                        </div>
+                        <div class="form-group android-signing-box" id="androidSigningGroup" style="display: none;">
+                            <label>安卓签名证书</label>
+                            <div class="android-signing-row">
+                                <label class="platform-checkbox" for="useNewAndroidCert">
+                                    <input type="checkbox" id="useNewAndroidCert">
+                                    <span class="platform-checkbox-label">启用安卓独立新证书</span>
+                                </label>
+                                <span class="android-signing-badge" id="androidSigningBadge">默认沿用原固定证书（老版本可直接覆盖升级）</span>
+                            </div>
+                            <div class="android-signing-warning" id="androidSigningWarning" style="display: none;"></div>
+                            <div class="android-signing-meta" id="androidSigningMeta" style="display: none;"></div>
+                        </div>
                         <div id="buildQueue" style="margin-top: 15px; padding: 10px 14px; background: rgba(0,0,0,0.2); border-radius: 6px; display: flex; align-items: center; gap: 10px;">
                             <span style="color: #aaa; font-size: 13px;">打包队列：</span>
                             <span id="buildQueueInfo" style="font-size: 13px; color: #00d4ff;">加载中...</span>
@@ -5801,7 +5865,153 @@
 	                }
 	            }
 	            updateBuildPlatformHelpText();
+	            renderAndroidSigningUI();
 	        }
+
+        var currentProfileAndroidSigning = {
+            profile: '',
+            enabled: false,
+            has_cert: false,
+            signing_id: '',
+            brand_name: '',
+            subject: '',
+            key_alias: '',
+            cert_sha256: '',
+            not_after: '',
+            created_at: '',
+            encryption_ready: true
+        };
+
+        function selectedPlatformsIncludeAndroid() {
+            var value = String(getSelectedBuildPlatformsValue() || '').trim();
+            if (!value || value === 'all') return true;
+            var items = value.split(',');
+            return items.indexOf('android') !== -1 || items.indexOf('android-tv') !== -1;
+        }
+
+        function resetProfileAndroidSigningState(profileKey) {
+            currentProfileAndroidSigning = {
+                profile: String(profileKey || ''),
+                enabled: false,
+                has_cert: false,
+                signing_id: '',
+                brand_name: '',
+                subject: '',
+                key_alias: '',
+                cert_sha256: '',
+                not_after: '',
+                created_at: '',
+                encryption_ready: true
+            };
+            var cb = document.getElementById('useNewAndroidCert');
+            if (cb) cb.checked = false;
+            renderAndroidSigningUI();
+        }
+
+        function applyProfileAndroidSigningState(profileKey, summary) {
+            var s = summary && typeof summary === 'object' ? summary : {};
+            currentProfileAndroidSigning = {
+                profile: String(profileKey || ''),
+                enabled: !!s.enabled,
+                has_cert: !!s.has_cert,
+                signing_id: String(s.signing_id || ''),
+                brand_name: String(s.brand_name || ''),
+                subject: String(s.subject || ''),
+                key_alias: String(s.key_alias || ''),
+                cert_sha256: String(s.cert_sha256 || ''),
+                not_after: String(s.not_after || ''),
+                created_at: String(s.created_at || ''),
+                encryption_ready: s.encryption_ready !== false
+            };
+            var cb = document.getElementById('useNewAndroidCert');
+            if (cb) cb.checked = currentProfileAndroidSigning.enabled;
+            renderAndroidSigningUI();
+        }
+
+        async function loadProfileAndroidSigningState(profileKey) {
+            profileKey = String(profileKey || '').trim();
+            if (!profileKey) {
+                resetProfileAndroidSigningState(profileKey);
+                return;
+            }
+            try {
+                var response = await api('GET', appendBuildClientQuery('/profiles/' + encodeURIComponent(profileKey) + '/android-signing'));
+                if (!response || !response.ok) return;
+                var data = await response.json();
+                if (getSelectedProfileKey() !== profileKey) return;
+                applyProfileAndroidSigningState(profileKey, data);
+            } catch (e) {
+                // 静默忽略非阻断状态查询失败
+            }
+        }
+
+        function renderAndroidSigningUI() {
+            var group = document.getElementById('androidSigningGroup');
+            var cb = document.getElementById('useNewAndroidCert');
+            var badge = document.getElementById('androidSigningBadge');
+            var warning = document.getElementById('androidSigningWarning');
+            var meta = document.getElementById('androidSigningMeta');
+            if (!group || !cb || !badge || !warning || !meta) return;
+
+            if (!selectedPlatformsIncludeAndroid()) {
+                group.style.display = 'none';
+                return;
+            }
+            group.style.display = '';
+
+            var checked = !!cb.checked;
+            var state = currentProfileAndroidSigning;
+
+            warning.className = 'android-signing-warning';
+            if (checked) {
+                if (!state.encryption_ready) {
+                    badge.className = 'android-signing-badge is-warn';
+                    badge.textContent = '本地加密密钥不可用';
+                    warning.className = 'android-signing-warning is-danger';
+                    warning.textContent = '服务端本地加密密钥不可用，请检查 DATABASE_ENCRYPTION_KEY 配置。';
+                    warning.style.display = '';
+                } else if (state.has_cert) {
+                    badge.className = 'android-signing-badge is-active';
+                    badge.textContent = '已绑定档案共享专属新证书（Flutter 与 React、手机与 Android TV 共用）';
+                    warning.textContent = '提示：当前档案已绑定共享专属新证书（Flutter 与 React 客户端共用同一把证书）。若用户设备上仍装有旧证书版本，必须先卸载旧版本才能安装；已装该新证书版本的用户后续（含同包名跨客户端）可直接覆盖升级。';
+                    warning.style.display = '';
+                } else {
+                    badge.className = 'android-signing-badge is-warn';
+                    badge.textContent = '首次打包时将按当前品牌名生成并永久绑定（Flutter 与 React 共用）';
+                    warning.className = 'android-signing-warning is-danger';
+                    warning.textContent = '重要提示：勾选启用安卓独立新证书后，原来的老版本安卓客户端必须先卸载才能安装新版本！证书首次生成后会永久绑定到当前档案（Flutter 与 React 共用同一把证书），后续版本可正常覆盖升级，请勿反复切换。';
+                    warning.style.display = '';
+                }
+            } else if (state.has_cert && state.enabled) {
+                badge.className = 'android-signing-badge is-warn';
+                badge.textContent = '已取消勾选，本次将切回旧固定证书';
+                warning.className = 'android-signing-warning is-danger';
+                warning.textContent = '风险提示：当前客户端此前已启用档案专属新证书；切回旧证书后，已安装新证书版本的安卓用户将无法覆盖升级（必须卸载重装）。';
+                warning.style.display = '';
+            } else if (state.has_cert) {
+                badge.className = 'android-signing-badge is-warn';
+                badge.textContent = '该档案已有共享专属证书，当前客户端未启用（默认沿用旧固定证书）';
+                warning.textContent = '提示：该档案已绑定共享专属新证书（可在下方核对 SHA-256）；当前客户端未启用，本次仍沿用旧固定证书。如需与 React 客户端共用同一把新证书，勾选上方开关即可。';
+                warning.style.display = '';
+            } else {
+                badge.className = 'android-signing-badge';
+                badge.textContent = '默认沿用原固定证书（老版本安卓客户端可直接覆盖升级）';
+                warning.style.display = 'none';
+                warning.textContent = '';
+            }
+
+            if (state.has_cert) {
+                var expireDate = state.not_after ? state.not_after.slice(0, 10) : '';
+                meta.textContent = '已绑定共享证书主体：' + (state.subject || state.brand_name || '-')
+                    + ' | 别名：' + (state.key_alias || '-')
+                    + ' | SHA-256：' + (state.cert_sha256 || '-')
+                    + (expireDate ? ' | 有效期至：' + expireDate : '');
+                meta.style.display = '';
+            } else {
+                meta.style.display = 'none';
+                meta.textContent = '';
+            }
+        }
 
 	        function updateBuildPlatformHelpText() {
 	            var help = document.getElementById('buildPlatformHelpText');
@@ -7613,6 +7823,7 @@
                 setCustomTrafficBarStatus('', 'info');
                 customUIColorConfigLoaded = false;
                 refreshCustomFeatureOverview();
+                loadProfileAndroidSigningState(getSelectedProfileKey());
                 if (!isAdminSession()) {
                     customTrafficBarAccessVerified = false;
                     customUIColorAvailableFeatures = [];
@@ -7902,6 +8113,11 @@
                 }
                 var data = await response.json();
                 upsertProfileMetadataFromLoad(name, data);
+                if (data.android_signing) {
+                    applyProfileAndroidSigningState(name, data.android_signing);
+                } else {
+                    loadProfileAndroidSigningState(name);
+                }
                 if (data.is_new || !data.yaml_content) {
                     currentProfileBaseYaml = getDefaultYamlTemplate();
                     document.getElementById('editor').value = currentProfileBaseYaml;
@@ -8956,6 +9172,35 @@
 
             var platforms = getSelectedBuildPlatformsValue();
             var ossConfigAudit = getOSSConfigAuditPayload();
+            var certCheckbox = document.getElementById('useNewAndroidCert');
+            var useNewAndroidCert = !!(certCheckbox && certCheckbox.checked);
+            if (selectedPlatformsIncludeAndroid()) {
+                if (useNewAndroidCert && !currentProfileAndroidSigning.has_cert) {
+                    var confirmedNewCert = await showAppConfirm(
+                        '启用安卓独立新证书后，原来的老版本安卓客户端必须先卸载才能安装新版本。\n\n本次打包将按当前档案品牌名自动生成专属 RSA-2048 证书（30年有效）并永久绑定到该档案（Flutter 与 React 客户端共用），后续版本可正常覆盖升级。\n\n确认启用并开始打包？',
+                        '确认启用安卓独立新证书',
+                        '确认启用并打包',
+                        '取消'
+                    );
+                    if (!confirmedNewCert) return;
+                } else if (useNewAndroidCert && currentProfileAndroidSigning.has_cert && !currentProfileAndroidSigning.enabled) {
+                    var confirmedSharedCert = await showAppConfirm(
+                        '当前档案已存在共享专属新证书，本次启用后将与 React 客户端共用同一把证书。\n\n若设备仍装着旧固定证书版本的客户端，必须先卸载旧版本才能安装；后续版本（含同包名跨客户端）可直接覆盖升级。\n\n确认启用共享新证书并开始打包？',
+                        '确认启用共享安卓新证书',
+                        '确认启用并打包',
+                        '取消'
+                    );
+                    if (!confirmedSharedCert) return;
+                } else if (!useNewAndroidCert && currentProfileAndroidSigning.has_cert && currentProfileAndroidSigning.enabled) {
+                    var confirmedLegacyCert = await showAppConfirm(
+                        '当前客户端此前已启用安卓独立新证书；取消勾选将切回旧固定证书，已安装新证书版本的用户必须卸载重装才能安装。\n\n确认切回旧证书并开始打包？',
+                        '确认切回旧安卓证书',
+                        '确认切回并打包',
+                        '取消'
+                    );
+                    if (!confirmedLegacyCert) return;
+                }
+            }
 
             setBuildStatus('正在提交打包...', 'info');
             try {
@@ -8967,7 +9212,8 @@
                     platforms: platforms,
                     branch: buildBranch,
                     oss_config_content: ossConfigAudit.oss_config_content,
-                    oss_config_content_format: ossConfigAudit.oss_config_content_format
+                    oss_config_content_format: ossConfigAudit.oss_config_content_format,
+                    use_new_android_cert: useNewAndroidCert
                 });
                 if (!response) return;
                 if (response.status === 429) {
@@ -8979,6 +9225,9 @@
                 var result = await response.json();
                 if (!response.ok) {
                     throw new Error(result.error || '触发失败');
+                }
+                if (result.android_signing) {
+                    applyProfileAndroidSigningState(profileName, result.android_signing);
                 }
 	                setBuildStatus('软件打包已提交！档案: ' + profileDisplayName + ', 内核: ' + formatBuildCoreLabel(buildCore) + ', 分支: ' + buildBranch + ', 平台: ' + platforms + ', 版本: ' + buildTag, 'success');
                 await loadBuildHistory();
@@ -9136,6 +9385,7 @@
                 }
                 loadBuildQueue();
                 updateBuildActionState();
+                renderAndroidSigningUI();
             });
             itemCheckboxes.forEach(function(cb) {
                 cb.addEventListener('change', function() {
@@ -9157,8 +9407,15 @@
                     }
                     loadBuildQueue();
                     updateBuildActionState();
+                    renderAndroidSigningUI();
                 });
             });
+            var androidCertCheckbox = document.getElementById('useNewAndroidCert');
+            if (androidCertCheckbox) {
+                androidCertCheckbox.addEventListener('change', function() {
+                    renderAndroidSigningUI();
+                });
+            }
             syncBuildPlatformPermissions();
         }
 

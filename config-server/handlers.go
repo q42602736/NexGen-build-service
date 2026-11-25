@@ -938,7 +938,12 @@ func (h *Handlers) GetProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	if !exists {
 		logAudit(claims.CodeID, claims.CodeName, "load_profile", name+" (新建)", r.RemoteAddr)
-		jsonResponse(w, map[string]interface{}{"yaml_content": "", "is_new": true})
+		resp := map[string]interface{}{
+			"yaml_content":    "",
+			"is_new":          true,
+			"android_signing": buildProfileAndroidSigningSummary(client, name),
+		}
+		jsonResponse(w, resp)
 		return
 	}
 
@@ -947,11 +952,13 @@ func (h *Handlers) GetProfile(w http.ResponseWriter, r *http.Request) {
 		displayName = nexGenProfileDisplayNameFromYaml(content, name)
 	}
 
+	summary := buildProfileAndroidSigningSummary(client, name)
 	payload := struct {
-		YamlContent string `json:"yaml_content"`
-		LastUpdated string `json:"last_updated,omitempty"`
-		DisplayName string `json:"display_name,omitempty"`
-	}{YamlContent: content, LastUpdated: lastUpdated, DisplayName: displayName}
+		YamlContent    string                        `json:"yaml_content"`
+		LastUpdated    string                        `json:"last_updated,omitempty"`
+		DisplayName    string                        `json:"display_name,omitempty"`
+		AndroidSigning *ProfileAndroidSigningSummary `json:"android_signing,omitempty"`
+	}{YamlContent: content, LastUpdated: lastUpdated, DisplayName: displayName, AndroidSigning: &summary}
 
 	if payload.YamlContent != "" {
 		if client == buildClientNexGenReact {
@@ -3432,6 +3439,7 @@ func (h *Handlers) TriggerBuild(w http.ResponseWriter, r *http.Request) {
 		Branch                 string `json:"branch"`
 		OSSConfigContent       string `json:"oss_config_content"`
 		OSSConfigContentFormat string `json:"oss_config_content_format"`
+		UseNewAndroidCert      *bool  `json:"use_new_android_cert"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, "请求格式错误", 400)
@@ -3530,6 +3538,30 @@ func (h *Handlers) TriggerBuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	androidSigningMode := androidSigningModeLegacy
+	androidSigningEnvelope := ""
+	var selectedAndroidSigning *ProfileAndroidSigningRecord
+	if (req.Client == buildClientNexGenReact || req.Client == buildClientLegacy) && platformsIncludeAndroid(req.Client, req.Core, req.Platforms) {
+		useNewCert := false
+		if req.UseNewAndroidCert != nil {
+			useNewCert = *req.UseNewAndroidCert
+		} else if existingSigning, signingErr := getProfileAndroidSigning(req.Client, req.Profile); signingErr == nil && existingSigning != nil && getProfileAndroidSigningEnabledForClient(req.Client, req.Profile, existingSigning) {
+			useNewCert = true
+		}
+
+		if useNewCert {
+			signingRec, statusCode, signingErr := h.ensureProfileAndroidSigningForBuild(req.Client, req.Profile, profileContent)
+			if signingErr != nil {
+				jsonError(w, signingErr.Error(), statusCode)
+				return
+			}
+			androidSigningMode = androidSigningModeProfile
+			selectedAndroidSigning = signingRec
+		} else if req.UseNewAndroidCert != nil {
+			_ = setProfileAndroidSigningEnabled(req.Client, req.Profile, false)
+		}
+	}
+
 	progressDetails := initialBuildProgressDetails(req.Client, req.Core, req.Platforms)
 	record, err := createBuildRecordWithProgressDetails(claims.CodeID, claims.CodeName, req.Client, req.Profile, req.Tag, req.Branch, req.Core, req.Platforms, progressDetails)
 	if err != nil {
@@ -3550,6 +3582,16 @@ func (h *Handlers) TriggerBuild(w http.ResponseWriter, r *http.Request) {
 	}
 
 	requestID := buildRecordRequestID(record)
+	if selectedAndroidSigning != nil {
+		envelope, sealErr := sealAndroidSigningForDispatch(selectedAndroidSigning, requestID)
+		if sealErr != nil {
+			_ = deleteBuildRecord(record.ID)
+			jsonError(w, sealErr.Error(), 500)
+			return
+		}
+		androidSigningEnvelope = envelope
+	}
+
 	inputs := map[string]string{
 		"client":         req.Client,
 		"profile":        req.Profile,
@@ -3559,6 +3601,10 @@ func (h *Handlers) TriggerBuild(w http.ResponseWriter, r *http.Request) {
 		"branch":         req.Branch,
 		"core":           req.Core,
 		"request_id":     requestID,
+	}
+	if req.Client == buildClientNexGenReact || req.Client == buildClientLegacy {
+		inputs["android_signing_mode"] = androidSigningMode
+		inputs["android_signing_envelope"] = androidSigningEnvelope
 	}
 
 	err = h.buildGH.TriggerWorkflow(cfg.BuildOwner, cfg.BuildRepo, clientConfig.WorkflowFile, inputs)
@@ -3576,17 +3622,21 @@ func (h *Handlers) TriggerBuild(w http.ResponseWriter, r *http.Request) {
 	invalidateBuildCachesForRecord(record)
 
 	logAudit(claims.CodeID, claims.CodeName, "trigger_build",
-		fmt.Sprintf("record_id=%d client=%s profile=%s tag=%s core=%s platforms=%s branch=%s", record.ID, req.Client, req.Profile, req.Tag, req.Core, req.Platforms, req.Branch),
+		fmt.Sprintf("record_id=%d client=%s profile=%s tag=%s core=%s platforms=%s branch=%s android_signing_mode=%s", record.ID, req.Client, req.Profile, req.Tag, req.Core, req.Platforms, req.Branch, androidSigningMode),
 		r.RemoteAddr)
 
 	go h.cleanupOverflowBuildRecords(record.CodeID, record.Client)
 	go h.cleanupExpiredBuildRecordReleases(false)
 
-	jsonResponse(w, map[string]interface{}{
+	respPayload := map[string]interface{}{
 		"message":    "打包已提交",
 		"record_id":  record.ID,
 		"request_id": requestID,
-	})
+	}
+	if req.Client == buildClientNexGenReact || req.Client == buildClientLegacy {
+		respPayload["android_signing"] = buildProfileAndroidSigningSummary(req.Client, req.Profile)
+	}
+	jsonResponse(w, respPayload)
 }
 
 func secureCompareString(expected, actual string) bool {

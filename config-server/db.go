@@ -141,6 +141,34 @@ func initDB() {
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);
 
+		CREATE TABLE IF NOT EXISTS profile_android_signing (
+			client TEXT NOT NULL DEFAULT 'nexgen_react',
+			profile_name TEXT NOT NULL,
+			signing_id TEXT NOT NULL UNIQUE,
+			enabled BOOLEAN NOT NULL DEFAULT 1,
+			brand_name TEXT NOT NULL DEFAULT '',
+			subject TEXT NOT NULL DEFAULT '',
+			key_alias TEXT NOT NULL DEFAULT '',
+			cert_sha256 TEXT NOT NULL DEFAULT '',
+			cert_sha1 TEXT NOT NULL DEFAULT '',
+			serial_hex TEXT NOT NULL DEFAULT '',
+			not_before TEXT NOT NULL DEFAULT '',
+			not_after TEXT NOT NULL DEFAULT '',
+			bundle_path TEXT NOT NULL DEFAULT '',
+			encrypted_payload TEXT NOT NULL DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (client, profile_name)
+		);
+
+		CREATE TABLE IF NOT EXISTS profile_android_signing_client_state (
+			client TEXT NOT NULL,
+			profile_name TEXT NOT NULL,
+			enabled BOOLEAN NOT NULL DEFAULT 0,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (client, profile_name)
+		);
+
 		CREATE INDEX IF NOT EXISTS idx_build_records_code_id_created_at
 		ON build_records (code_id, created_at DESC);
 
@@ -806,6 +834,12 @@ func renameProfileReferences(oldName, newName string) error {
 		return err
 	}
 	if _, err := tx.Exec(`UPDATE profile_asset_history SET profile_name = ? WHERE profile_name = ?`, newName, oldName); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE profile_android_signing SET profile_name = ?, updated_at = CURRENT_TIMESTAMP WHERE profile_name = ?`, newName, oldName); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE profile_android_signing_client_state SET profile_name = ?, updated_at = CURRENT_TIMESTAMP WHERE profile_name = ?`, newName, oldName); err != nil {
 		return err
 	}
 
@@ -1594,6 +1628,12 @@ func removeProfileReferences(key string) error {
 		if _, err := tx.Exec("UPDATE activation_codes SET allowed_profiles = ? WHERE id = ?", string(payload), code.ID); err != nil {
 			return err
 		}
+	}
+	if _, err := tx.Exec("DELETE FROM profile_android_signing WHERE profile_name = ?", key); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("DELETE FROM profile_android_signing_client_state WHERE profile_name = ?", key); err != nil {
+		return err
 	}
 	return tx.Commit()
 }

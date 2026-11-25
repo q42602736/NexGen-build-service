@@ -172,6 +172,7 @@ func main() {
 		r.Get("/api/auth/me", h.GetCurrentUserInfo)
 		r.Get("/api/profiles", h.ListProfiles)
 		r.Get("/api/profiles/{name}", h.GetProfile)
+		r.Get("/api/profiles/{name}/android-signing", h.GetProfileAndroidSigning)
 		r.Post("/api/custom-features/ui-colors/load", h.GetPublicUIColorCustomConfig)
 		r.Put("/api/custom-features/ui-colors", h.SavePublicUIColorCustomConfig)
 		r.Put("/api/profiles/{name}", h.SaveProfile)
